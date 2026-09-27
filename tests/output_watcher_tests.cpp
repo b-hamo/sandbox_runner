@@ -185,6 +185,26 @@ void check_runner_shutdown(const std::wstring& exe, const std::wstring& output) 
             } else Sleep(10);
         }
         require(log.find("WATCHING") != std::string::npos, "Runner did not start watching");
+        const std::wstring candidate_path = output + L"\\runner-candidate.txt";
+        write_file(candidate_path);
+        const ULONGLONG candidate_start = GetTickCount64();
+        const std::string expected = "ARTIFACT_CANDIDATE \"runner-candidate.txt\"";
+        while (log.find(expected) == std::string::npos && GetTickCount64() - candidate_start < 5000) {
+            DWORD available = 0;
+            require(PeekNamedPipe(reader, nullptr, 0, nullptr, &available, nullptr) != 0,
+                    "cannot read candidate output");
+            if (available) {
+                char buffer[4096]; DWORD count = 0;
+                require(ReadFile(reader, buffer, (available < sizeof(buffer) ? available : sizeof(buffer)),
+                                 &count, nullptr) != 0, "candidate output read failed");
+                log.append(buffer, count);
+            } else Sleep(10);
+        }
+        DeleteFileW(candidate_path.c_str());
+        require(log.find(expected) != std::string::npos, "Runner did not report stable candidate");
+        require(log.find("PRESCAN") == std::string::npos && log.find("NO_DETECTION") == std::string::npos,
+                "Runner still reports malware scan results");
+        std::cout << "PASS Runner EXE ARTIFACT_CANDIDATE output\n";
         FreeConsole();
         require(AttachConsole(process.dwProcessId) != 0, "cannot attach to hidden Runner console");
         attached = true;
