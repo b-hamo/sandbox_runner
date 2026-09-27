@@ -75,32 +75,11 @@ JSON 필드, 업로드 기능은 이번 변경에서 정의하지 않는다.
 - 감시 누락·오류·큐 초과는 전체 후보를 무효화하며 재시작이 필요하다.
 - 종료 시 worker 대기를 깨우고 join한다. Defender 자식 프로세스와 검사용 임시 복사본은 생성하지 않는다.
 
-## 재현 및 검증
+## 검증 이력
 
-MSYS2 UCRT64에서:
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRUNNER_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure -V
-```
-
-`output_watcher`는 기존 감시 검증과 실제 Runner의 후보 로그·Ctrl+C 종료를 확인한다.
-`artifact_candidate`는 debounce, 같은 세대의 중복 억제, 안정화 중 변경·삭제·이름 변경,
-메타데이터 재관찰, 쓰기 잠금 재시도·시간 초과, 경로 경계, 실제 재귀 감시→후보 연결,
-범위 밖 제외, 감시 누락·큐 초과·종료·콜백 예외를 검증한다.
-
-Sandbox에는 빌드된 `sandbox_runner.exe`, `candidate_tests.exe`, `output_watcher_tests.exe`와
-`tests/sandbox_candidate_check.ps1`를 같은 읽기 전용 전달 폴더에 둔다.
-Sandbox PowerShell에서 아래를 실행한다. 테스트 도구는 제품 배포 대상이 아니다.
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\RunnerCandidateTest\sandbox_candidate_check.ps1
-$LASTEXITCODE # 0: 모든 검사와 테스트용 Runner 종료 확인
-```
-
-로그는 Sandbox 바탕 화면의 `runner-candidate-check-*` 폴더에 남긴다.
-테스트 파일은 임시 Output에서 만들고 정리하며 실제 작업 Output은 수정하지 않는다.
+테스트 소스·스크립트와 테스트용 CMake는 로컬 `tests/`에만 보관하고 Git에서 제외한다.
+공유 CMake는 제품 Runner만 빌드하며 테스트 파일을 요구하지 않는다.
+수동 실행·감시 확인 절차는 README를 따른다. 아래는 기존 로컬 테스트로 확인한 결과다.
 
 2026-09-27 검증 결과:
 
