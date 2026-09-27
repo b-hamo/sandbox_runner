@@ -20,7 +20,9 @@ add_library(runner_telemetry OBJECT
     src/transport/telemetry/winhttp_websocket.cpp)
 target_include_directories(runner_telemetry PUBLIC src)
 target_link_libraries(runner_telemetry PUBLIC jsoncpp_static winhttp bcrypt crypt32)
-target_link_libraries(sandbox_runner PRIVATE runner_telemetry)
+add_library(runner_lifecycle STATIC src/session_context.cpp src/runner_lifecycle.cpp)
+target_link_libraries(runner_lifecycle PUBLIC runner_telemetry)
+target_link_libraries(sandbox_runner PRIVATE runner_lifecycle)
 
 
 # Keep the initial Runner executable independent of the host's MinGW DLLs.

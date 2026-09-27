@@ -1,12 +1,14 @@
 # sandbox_runner
 
 Windows Sandbox 내부의 세션 Output 변경을 감시하는 단일 C++ Runner다.
-Sandbox 하나를 세션 하나로 사용한다. 인자 없이 실행하면 `C:\RunnerWorkspace\Output`을
-준비하고 하위 폴더까지 감시하며 정상 종료 요청 또는 감시 오류가 발생할 때까지 실행된다.
+Sandbox 하나를 세션 하나로 사용한다. `--session-context <파일>`로 외부 Context를 주입하고
+Telemetry READY 이후 `C:\RunnerWorkspace\Output`을 준비한다. 하위 폴더까지 감시하며
+정상 종료 요청 또는 감시 오류가 발생할 때까지 실행된다. Context 없이 실행하면 명시적으로 실패한다.
 
 ## 현재 범위
 
-- `src/main.cpp`: 공통 실행 진입점, `--output` 입력, 로그 및 Ctrl+C/Ctrl+Break 종료.
+- `src/main.cpp`: 공통 실행 진입점, Context·`--output` 입력, 로그 및 Ctrl+C/Ctrl+Break 종료.
+- `src/session_context.*`, `src/runner_lifecycle.*`: 기존 Context 재사용·외부 입력 검증·Telemetry READY 확인·종료 연결.
 - `src/runner_paths.h`: 세션의 고정 Output 경로. C++ 구성 요소는 이 상수를 공유한다.
 - `src/artifact/output_watcher.{h,cpp}`: Windows `ReadDirectoryChangesW` 기반 감시.
 - `src/artifact/candidate_detector.{h,cpp}`: 기존 이벤트 큐를 재사용한 파일별 debounce·안정화·세대·후보 상태 관리.
@@ -32,7 +34,8 @@ Sandbox 하나를 세션 하나로 사용한다. 인자 없이 실행하면 `C:\
 [이슈 #3](https://github.com/b-hamo/sandbox_runner/issues/3)의 최신 설계 변경에 따라 파일 안정화와 Artifact 후보 보고를 연결한다.
 Runner는 Defender 검사와 SHA-256/MIME/크기 검증을 수행하지 않는다. 이 검증은 Host Quarantine의 책임이다.
 GUI 제어, Artifact의 SCRP 연동, 업로드 및 Host의 최종 반출 승인은 포함하지 않는다.
-재사용 가능한 Telemetry 전송 계층은 포함하지만 현재 `main.cpp`는 이를 자동 시작하지 않는다.
+Telemetry는 외부 Context로 시작하며 Control HELLO_ACK 입력은 아직 미구현이다.
+입력 파일과 테스트/Host 계약의 경계는 [Session Context 입력 절차](docs/telemetry.md)를 따른다.
 안정화 판단·후보 이벤트·제한·검증 결과는 [후보 감지 문서](docs/artifact-candidates.md)를 따른다.
 C++ 표준 버전은 팀 합의 전까지 CMake에서 고정하지 않으며 사용 중인 컴파일러 기본값을 따른다.
 
@@ -93,7 +96,7 @@ echo $?
 ```
 
 도움말에 기본 경로와 재귀 감시 동작이 표시되며 종료 코드는 `0`이다.
-인자 없이 실행하면 실제 고정 폴더를 만들고 상주하므로 Host 검증에는 아래 `--output` 예제를 사용한다.
+실제 실행에는 유효한 Context와 연결 가능한 TLS/WSS peer가 필요하다. Host 검증에는 아래 `--output` 예제를 사용한다.
 MSYS2 터미널 밖의 PowerShell에서도 저장소 루트에서 확인한다.
 
 ```powershell
@@ -106,7 +109,7 @@ $LASTEXITCODE
 ```powershell
 $outputPath = Join-Path $env:TEMP 'runner-session-example\Output'
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-& .\build\sandbox_runner.exe --output $outputPath
+& .\build\sandbox_runner.exe --session-context C:\session\context.json --output $outputPath
 ```
 
 `WATCHING` 출력 후 두 번째 창에서:
@@ -146,9 +149,9 @@ $target = Join-Path $checkRoot 'target'
 $alias = Join-Path $checkRoot 'alias'
 New-Item -ItemType Directory -Path (Join-Path $target 'nested') -Force | Out-Null
 New-Item -ItemType Junction -Path $alias -Target $target | Out-Null
-& .\build\sandbox_runner.exe --output $alias
+& .\build\sandbox_runner.exe --session-context C:\session\context.json --output $alias
 $LASTEXITCODE # 1, Win32 error 5
-& .\build\sandbox_runner.exe --output (Join-Path $alias 'nested')
+& .\build\sandbox_runner.exe --session-context C:\session\context.json --output (Join-Path $alias 'nested')
 $LASTEXITCODE # 1, Win32 error 5
 ```
 
@@ -156,12 +159,13 @@ $LASTEXITCODE # 1, Win32 error 5
 
 Host에서 빌드한 EXE와 필요한 런타임 DLL만 Sandbox 내부의 테스트 폴더로 복사해 실행한다.
 Sandbox에 CMake, Ninja 또는 GCC를 설치하지 않는다.
-Sandbox 내부에서 Runner를 인자 없이 실행해 고정 경로 준비와 상주를 확인한다.
+Sandbox 내부에서 신뢰 앵커와 유효한 Context를 준비하고 `--session-context <파일>`로 실행한다.
+`--output`을 생략하여 Telemetry READY 이후 고정 경로 준비와 상주를 확인한다.
 위 PowerShell 파일 변경 절차의 `$outputPath`를 `C:\RunnerWorkspace\Output`으로 바꾸어
 파일 변경과 Ctrl+C 종료를 확인한다.
 Host 폴더를 매핑하여 전달한다면 읽기 전용으로 제한하며, Host에 쓰기 가능한 Output 공유 폴더를 만들지 않는다.
 
-Sandbox 자동 시작은 Runtime 담당의 `.wsb` `LogonCommand`/Bootstrap에서 인자 없이 Runner를 실행하도록 연결한다.
+Sandbox 자동 시작은 Runtime 담당의 `.wsb` `LogonCommand`/Bootstrap에서 Context를 전달하도록 연결한다.
 이 저장소는 Sandbox를 생성·종료하는 Runtime 구현을 추가하지 않는다.
 Runner는 감시 대기 중에도 계속 실행되며, 아직 Control 실행 루프와는 연결되지 않았다.
 관리되는 종료는 Runner 중지 요청 → 감시 I/O 정리 완료 → Sandbox 종료 순서로 연결해야 한다.
@@ -170,7 +174,8 @@ Sandbox 강제 종료 시의 정상 정리 완료는 보장하지 않는다.
 현재 개발 환경에서는 UCRT64 Release 빌드와 Host Windows 통합 테스트를 통과했다.
 MSYS2/MinGW를 PATH에서 뺀 PowerShell에서도 EXE 및 통합 테스트를 실행했다.
 Junction 자체와 상위 Junction 경로 거부를 확인했다. 심볼릭 링크 테스트는 권한 부족(1314)으로 건너뛰었다.
-실제 Windows Sandbox에서도 후보 감지·감시 테스트와 Runner 후보 로그·Ctrl+C 종료를 확인했다.
+기존 Artifact 구현은 실제 Windows Sandbox에서 후보 감지·감시 테스트와 Runner 후보 로그·Ctrl+C 종료를 확인했다.
+Issue #7의 Telemetry lifecycle 통합은 Host Windows에서 검증했으며 실제 Sandbox·팀 Host 연동은 미검증이다.
 OS 감시 버퍼 강제 초과 및 디스크 오류 재현은 아직 검증하지 않았다. 내부 큐 초과는 테스트했다.
 
 ## 후속 합의

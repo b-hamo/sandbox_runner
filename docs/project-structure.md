@@ -4,7 +4,8 @@
 
 이 문서는 현재 Runner의 코드 구조와 SCRP 통신을 연결할 후속 구조를 구분해 설명한다.
 Issue #5에서 Artifact와 독립적인 Telemetry 전송 계층을 구현했다. Host의 확정 payload
-스키마·인증 헤더는 외부 계약으로 주입하며, 제품 진입점에서의 자동 연결은 아직 없다.
+스키마·인증 헤더는 외부 계약으로 주입한다. Issue #7에서 외부 Session Context 검증과
+Telemetry 시작·READY 확인·종료를 제품 진입점에 연결했다. Control HELLO_ACK는 아직 미구현이다.
 제품 실행 파일은 `sandbox_runner.exe` 하나이며, Control과 Artifact를 같은 실행 파일에 통합한다.
 후속 구조에 적힌 디렉터리·클래스는 구현 위치에 대한 제안이며 현재 존재하는 코드가 아니다.
 
@@ -36,6 +37,8 @@ sandbox_runner/
 ├─ src/
 │  ├─ main.cpp
 │  ├─ runner_paths.h
+│  ├─ session_context.h / session_context.cpp
+│  ├─ runner_lifecycle.h / runner_lifecycle.cpp
 │  ├─ protocol/scrp/
 │  │  ├─ envelope.h / envelope.cpp
 │  │  └─ telemetry_messages.h / telemetry_messages.cpp
@@ -62,8 +65,10 @@ sandbox_runner/
 
 | 파일 | 현재 책임 |
 | --- | --- |
-| `src/main.cpp` | Output 준비, 감시와 후보 감지 연결, 콘솔 출력, 정상 종료 조정 |
+| `src/main.cpp` | 외부 Context 입력, Telemetry READY 이후 Output 준비·감시·후보 감지, 콘솔 종료 조정 |
 | `src/runner_paths.h` | 기본 Output 경로 `C:\RunnerWorkspace\Output` 정의 |
+| `src/session_context.*` | 기존 `telemetry::Context`를 `runner::SessionContext`로 재사용, 사전 검증·명시적 로컬 JSON 입력 |
+| `src/runner_lifecycle.*` | 주입 Context로 Client 생성·시작, 취소 가능한 READY 대기, 실패 시 RAII 정리 |
 | `src/artifact/output_watcher.*` | Windows 변경 알림의 재귀 감시, 경로 경계, 감시 오류·취소 처리 |
 | `src/artifact/candidate_detector.*` | 이벤트 큐·worker, 파일별 debounce·관찰 일정, 변경 세대·후보 상태·무효화 관리 |
 | `src/artifact/file_stability.*` | 허용된 일반 파일 접근, 경로 체인 검증, 쓰기 공유 제한, 파일 정보 관찰·비교 |
@@ -72,7 +77,7 @@ sandbox_runner/
 | `src/transport/telemetry/telemetry_client.*` | 전용 worker, 채널 바인딩, ACK 검증, 상태·재연결·재전송·종료 |
 | `src/transport/telemetry/pending_event_store.*` | 미확인 이벤트 보관, 중복·충돌·용량 제한, 명시적 만료 |
 | `src/transport/telemetry/winhttp_websocket.*` | WinHTTP 비동기 WSS, 인증 헤더 주입, TLS 검증, 프레임 재조립·취소 |
-| `CMakeLists.txt` | 단일 Runner, 공용 OBJECT 타깃 `runner_telemetry`, 제품 빌드만 구성 |
+| `CMakeLists.txt` | 단일 Runner, `runner_telemetry` OBJECT와 `runner_lifecycle` STATIC 연결, 제품 빌드만 구성 |
 
 기존 `output_watcher`를 새 감시기로 교체하지 않는다. 후보 상태는 현재
 `CandidateDetector` 내부에서 관리하며 별도의 Candidate Registry·Publisher는 아직 없다.
@@ -81,6 +86,8 @@ sandbox_runner/
 
 ```text
 main.cpp
+  ├─ --session-context 로컬 파일 → runner::SessionContext 검증
+  ├─ start_telemetry() → Client worker → WSS → CHANNEL_HELLO/ACK → READY
   ├─ Output 경로 준비
   ├─ CandidateDetector 생성 → worker 시작
   └─ watch_output() 실행 → 호출 스레드에서 변경 알림 대기
@@ -109,10 +116,26 @@ main.cpp
 안정화는 관찰 기반 판단이므로 최종 쓰기 완료·안전성·파일의 불변성을 보장하지 않는다.
 상세 조건과 제한은 [Artifact 후보 감지 문서](artifact-candidates.md)를 따른다.
 
-종료 요청 시 `main.cpp`가 감시 I/O 종료를 기다리고 후보 worker를 중지·join한다.
+종료 요청 시 `main.cpp`가 감시 I/O 종료를 기다리고 후보 worker를 중지·join한 뒤
+Telemetry를 stop한다. 생산자를 먼저 중지하여 종료 중 새 작업이 유입되지 않게 한다.
+Telemetry는 신규 enqueue를 거부하고 WSS I/O·콜백을 정리한 후 worker를 join한다.
+미확인 Pending은 stop 후 진단 가능하고 Client 소멸 시 해제한다. ACK 성공으로 간주하거나 무한 drain하지 않는다.
+예외 시에도 생성의 역순으로 후보 worker, Telemetry, 종료 이벤트를 정리한다.
 감시 오류·누락이 드러나면 후보 상태도 무효화한다. Sandbox의 시작·강제 종료는 Host Runtime의 책임이다.
 
-### 독립 Telemetry 흐름 — 현재 구현
+### Runner Session Context와 Telemetry 흐름 — 현재 구현
+
+`src/session_context.h`의 `runner::SessionContext`는 `telemetry::Context`의 alias다.
+기존 `scrp::SessionContext`의 ID·Runtime generation, endpoint·TLS trust, credential provider,
+외부 `TelemetrySchema`를 그대로 사용한다. Context나 인증 정보를 새로 생성하지 않는다.
+`start_telemetry()`는 필수 값·credential을 사전 검증하고 Client를 생성·시작하며 READY까지 기다린다.
+초기 연결 재시도 소진·기본 30초 READY 제한·종료 요청은 명시적 실패로 반환하며 Client를 정리한다.
+기존 Client의 재연결 정책은 유지한다. READY 이후 장애의 Host 정책·Coverage 연결은 후속 작업이다.
+
+현재 실행 파일은 `--session-context <파일>`을 필수로 받는다. 로컬 입력 형식·trust·handshake
+계약은 [Telemetry 문서](telemetry.md)의 Session Context 입력 절차를 따른다.
+이는 Control/Host wire 규약이 아니며 Control HELLO_ACK, credential 발급·갱신은 구현하지 않는다.
+향후 Control은 `runner::SessionContext`와 실제 `TelemetrySchema`를 직접 주입하면 된다.
 
 ```text
 호출자: Host SessionContext / endpoint / credential provider / TLS trust / TelemetrySchema 주입
@@ -128,7 +151,8 @@ main.cpp
 `snapshot()`은 상태, Pending 개수·바이트, 거부·만료·오류 누계와 진단을 제공한다.
 만료·초과는 Coverage 저하로 노출하며 임의로 SECURITY_EVENT 스키마를 만들어 보내지 않는다.
 Host의 Action 차단 정책이나 Coverage wire 연결은 후속 책임이다.
-Artifact 콜백과 `main.cpp`는 변경하지 않았고, 제품 실행 시 Telemetry를 자동 시작하지 않는다.
+제품 실행 시 위 lifecycle에서 Telemetry를 시작한다. Artifact 콜백은 기존 콘솔 출력만 수행하며
+Candidate → SECURITY_EVENT 연결은 구현하지 않았다.
 
 ## 4. 후속 확장 구조 제안 — 미구현
 
@@ -139,6 +163,8 @@ Artifact 콜백과 `main.cpp`는 변경하지 않았고, 제품 실행 시 Telem
 src/
 ├─ main.cpp                       공통 시작·종료 및 모듈 연결
 ├─ runner_paths.h
+├─ session_context.*              [현재] 공용 Context alias·검증·외부 입력
+├─ runner_lifecycle.*             [현재] Telemetry 시작·READY 확인·실패 정리
 ├─ artifact/                      현재 감시·안정화·후보 감지 유지
 │  ├─ output_watcher.*
 │  ├─ candidate_detector.*
@@ -225,7 +251,8 @@ Sandbox에서 `localhost`는 Guest 자신이므로 Host 주소로 사용하지 �
 | Artifact 업로드 | `https://<host>:17443/scrp/v1/artifacts/<upload_id>` |
 
 `17443`은 설정 가능한 기본 포트다. 같은 포트를 사용해도 연결·인증 Scope·큐·제한은 분리한다.
-Control의 bootstrap 인증과 HELLO_ACK를 통한 별도 채널 자격 발급을 거쳐 Telemetry를 연결한다.
+최종 Host 연동에서는 Control의 bootstrap 인증과 HELLO_ACK로 별도 채널 자격을 전달할 예정이다.
+현재는 해당 Control 경로 대신 외부 Context를 명시적으로 주입해 Telemetry를 연결한다.
 TLS 인증서 검증을 끄거나 평문으로 자동 전환하지 않는다. 토큰은 로그나 URL에 넣지 않는다.
 현재 WSS는 Windows 인증서 저장소의 체인·호스트명 검증과 최소 TLS 1.2를 사용한다.
 `TlsTrust::leaf_sha256`는 선택적 추가 pin이며 기본 인증서 검증을 대체하지 않는다.
@@ -305,7 +332,7 @@ README는 프로젝트 개요·빌드 진입점, 이 문서는 구조와 책임 
 
 ## 10. 다음 작업
 
-1. 공용 Session Context와 SCRP 스키마 연결 계약을 확인한다. 파일 세대·Runtime 세대 및 후보 해시 정책을 구분한다.
+1. 구현된 공용 Session Context에 실제 Host SCRP 스키마를 제공한다. 파일 세대·Runtime 세대 및 후보 해시 정책을 구분한다.
 2. Control handshake를 구현하고 HELLO_ACK의 Telemetry 자격·확정 스키마를 현재 Client에 연결한다.
 3. 내부 후보 상태를 SECURITY_EVENT로 연결하고 ACK·재전송·무효화 계약을 검증한다.
 4. 승인된 ARTIFACT_REQUEST 처리와 제한된 HTTPS 업로드를 구현한다.

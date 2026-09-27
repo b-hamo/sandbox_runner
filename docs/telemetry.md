@@ -1,8 +1,68 @@
 # SCRP Telemetry 전송 계층
 
-Issue #5는 일반 `SECURITY_EVENT` 전송 기반을 구현한다. Artifact 후보 변환·파일 접근·업로드를
-수행하지 않는다. 기존 `main.cpp`, `CandidateDetector`, `output_watcher`, `file_stability`의
-책임과 실행 흐름은 그대로다. 제품 EXE에 공용 OBJECT 타깃을 연결하지만 자동 접속은 하지 않는다.
+Issue #5의 일반 `SECURITY_EVENT` 전송 기반을 Issue #7에서 Runner 시작·종료에 연결했다.
+제품 EXE는 외부 Session Context로 Telemetry를 시작하고 READY 확인 뒤 Artifact 감시를 시작한다.
+Artifact 후보 변환·업로드·Control HELLO_ACK는 미구현이며 기존 Artifact 모듈 책임은 유지한다.
+
+## Runner Session Context 입력과 lifecycle
+
+`src/session_context.h`의 `runner::SessionContext`는 기존 `telemetry::Context`의 alias다.
+`runner::validate_session_context()`는 세션 ID·Runtime ID·양의 generation, WSS endpoint,
+TLS 설정, schema, credential provider 및 현재 credential을 검사한다. provider는 시작 전에도
+호출되며 매 연결 시 Client가 다시 검증한다. 예외에 credential이 포함돼도 진단으로 노출하지 않는다.
+기존 C++ `TlsTrust`의 빈 pin은 Windows 인증서 체인·호스트명 검증 사용을 뜻하며 trust 누락이 아니다.
+인증서 저장소의 실제 신뢰 여부는 WSS 연결에서 검증한다.
+
+`runner::start_telemetry(context, stop_event, ready_timeout, options, factory)`는 Client를 생성·시작하고
+READY인 `unique_ptr<TelemetryClient>`를 반환한다. 기본 READY 대기는 30초이며 테스트에서 짧게
+주입할 수 있다. 재시도 소진·READY 시간 초과·종료 이벤트·초기화 오류는 예외로 명시하고 생성된
+Client를 stop/join한 뒤 반환한다. handshake는 기존 Client 내부에서만 수행한다.
+초기화 실패 시 EXE는 비정상 종료하며 Output을 준비하거나 감시 worker를 시작하지 않는다.
+현재 Ctrl+C/Ctrl+Break를 READY 대기 중 받으면 시작 취소로 비정상 종료한다.
+
+정상 종료는 watcher I/O 종료 → CandidateDetector stop/join → Telemetry stop/join → 종료 이벤트 해제다.
+생산자를 먼저 끝내고 전송 계층을 정리한다. Client 소멸자의 중복 stop도 안전하다.
+Pending은 stop 후 확인 가능하며 소멸 시 메모리가 해제된다. 미확인 이벤트를 ACK 처리하지 않는다.
+READY 이후 재연결은 기존 Client 정책이며 Host의 장애 대응·Coverage 연동은 후속 작업이다.
+
+### 실행 파일의 명시적 로컬 입력
+
+```powershell
+& .\build\sandbox_runner.exe --session-context C:\session\context.json --output C:\session\Output
+```
+
+`--session-context`는 필수다. `--output` 생략 시 READY 후 기본 세션 Output을 준비한다.
+입력 파일은 최대 64 KiB의 UTF-8 JSON object이며, 아래 필드는 모두 필요하다.
+설정 객체의 중복·알 수 없는 key, 잘못된 타입, 누락은 실패한다. handshake payload의 필드는
+외부 계약이 정한다. 파일 경로는 Unicode를 지원한다.
+
+| 로컬 필드 | 값·검증 |
+| --- | --- |
+| `session_id`, `runtime_id` | 외부에서 전달된 비어 있지 않은 문자열 |
+| `generation` | 0보다 큰 uint64 정수. 문자열·실수·음수 거부 |
+| `endpoint` | Host의 정확한 `wss://` 주소. query·userinfo·평문 fallback 없음 |
+| `credential.header_name`, `credential.header_value` | 외부에서 합의한 헤더 이름·값. 기본 헤더·토큰 없음 |
+| `credential.expires_unix_seconds` | 미래 만료 시각(Unix 초 정수), clock 표현 범위 이내 |
+| `tls.trust` | 명시적으로 `windows-system` 지정. 인증서 체인·호스트명 검증 필수 |
+| `tls.leaf_sha256` | 빈 문자열 또는 소문자 64자리 SHA-256 추가 pin |
+| `handshake.hello_payload` | 외부 계약의 CHANNEL_HELLO payload object |
+| `handshake.ack_status` | 기대 CHANNEL_ACK status 문자열 또는 null |
+| `handshake.ack_payload` | 기대 CHANNEL_ACK payload object 전체 |
+
+이 파일 형식은 **로컬 주입용**이며 SCRP/Control wire 스키마를 확정하지 않는다.
+인증 헤더·테스트 ID·토큰·ACK 성공값을 제품 기본값으로 제공하지 않는다.
+로컬 `InjectedHandshake` adapter는 ACK의 status/payload를 외부 기대값과 정확히 비교하고
+error가 null인지 검사한다. Client가 Envelope의 세션·상관 ID·connection_id 등을 추가 검증한다.
+ACK payload에 동적 connection_id 등이 있으면 이 단순 adapter만으로 일반 Host 계약을 표현할 수 없다.
+이 경우 향후 Control 입력에서 실제 `TelemetrySchema` 구현과 Context를 직접 주입한다.
+로컬 adapter는 SECURITY_EVENT/EVENT_ACK를 지원하지 않으며 해당 API 사용을 명시적으로 거부한다.
+이는 테스트용 handshake 계약이 제품 이벤트 계약으로 확장되는 것을 방지한다.
+
+파일은 credential을 포함하므로 신뢰된 launcher가 해당 세션만 읽을 수 있게 배치하고 수명을 관리한다.
+Runner는 내용을 로그로 출력하거나 trust anchor를 설치하지 않는다. CLI에는 토큰 대신 파일 경로만 준다.
+현재 파일은 시작 시 한 번 읽으며 자격 갱신·Control 인증·Host discovery를 수행하지 않는다.
+테스트 값은 Git 제외 `tests/`에서 생성하고 임시 파일·인증서는 검증 후 제거한다.
+향후 `main.cpp`의 파일 입력을 Control HELLO_ACK → `runner::SessionContext` 변환으로 교체한다.
 
 ## 호출 계약
 
@@ -34,7 +94,7 @@ client.stop(); // I/O 취소 및 join; 여러 번 호출 가능
 
 Client는 한 번 시작한다. `start/stop`은 직렬화되고 enqueue·snapshot은 동시 호출 가능하다.
 세션/generation 변경은 새 Client로 처리한다. 이전 Pending을 새 Runtime으로 자동 이전하지 않는다.
-제품에서의 생성·시작·종료 배선은 Control/Bootstrap 계약 확정 후 `main.cpp`에서 수행한다.
+제품 생성·시작·종료는 위 Runner lifecycle에 연결되어 있으며 실제 Control 입력 변환만 후속 작업이다.
 
 ## Envelope와 ACK
 
@@ -137,10 +197,42 @@ MSYS2를 PATH에서 제외한 PowerShell에서 Runner `--help`와 Telemetry 단�
 새 EXE 약 12~15ms, 기존 로컬 EXE 약 11~41ms였다. 이는 시작 비용 확인용 로컬 측정이며
 실제 Sandbox 시작이나 네트워크 handshake 성능 측정은 아니다. 테스트 프로세스와 임시 Root 인증서 잔존은 없었다.
 
+### Issue #7 검증 결과 (2026-09-27)
+
+UCRT64 Release 제품 빌드와 로컬 CTest **6/6**이 통과했다(최종 재검증 59.82초).
+`output_watcher`, `artifact_candidate`, `telemetry`, `telemetry_wss` 회귀 및
+`runner_lifecycle`, `runner_wss` 통합 검증을 포함한다.
+
+- Context 필수 값·generation 타입·TLS trust·credential·만료·JSON 오류의 명시적 실패.
+- 주입 Context의 ID·generation 전달, READY 반환, 연결 실패·CHANNEL_ACK 시간 초과·Runner READY 제한·시작 중 취소.
+- 반복 start/stop 25회 후 핸들 수 증가 없음, socket 소멸·worker 종료, 중복 stop·종료 후 enqueue 거부.
+- 실제 EXE의 WSS CHANNEL_HELLO/ACK → READY → Artifact 후보 → Ctrl+C 정상 종료를 3회 확인.
+  peer에서 socket 종료를 확인했으며 Artifact SECURITY_EVENT는 전송하지 않았다.
+- 실제 EXE 연결 실패 시 감시 시작 차단. 실제 WSS 회귀의 TLS 거부·재전송·I/O 취소 유지.
+- 임시 인증서와 테스트 프로세스 잔존 없음. PowerShell에서 제품 `--help` 실행 확인.
+  EXE는 strip 전 3,513,414바이트이며 DLL 의존성은 Windows 기본 DLL뿐이다.
+  MSYS2를 PATH에서 제외한 도움말 5회 실행은 136.6/13.7/11.8/13.2/12.3ms였다.
+  이는 Host 로컬 실행 측정이며 실제 Sandbox 시작·handshake 성능 측정이 아니다.
+
+테스트는 기존 정책대로 Git 제외 `tests/`에 있다. symlink 하위 검사는 권한 부족(Win32 1314)으로
+건너뛰었으며 junction 검사는 통과했다. 이 작업의 실제 Sandbox·팀 Host 호환성은 미검증이다.
+한글 절대 경로가 오브젝트 경로에 중복되는 로컬 GCC assembler 문제는 아래 경로 해시 옵션으로 회피했다.
+
+```bash
+cmake -S tests -B build/local-tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OBJECT_PATH_MAX=190 -DRUNNER_TEST_LOCAL_TLS=ON -DPython3_EXECUTABLE=<Windows-python.exe>
+cmake --build build/local-tests
+ctest --test-dir build/local-tests --output-on-failure
+```
+
+Python은 `cryptography`가 필요하다. WSS 테스트는 매번 생성한 테스트 인증서만 현재 사용자 Root에
+잠시 등록하고 finally에서 해당 thumbprint를 제거한다. 제품은 인증서를 설치하지 않는다.
+실제 Sandbox 재현은 README의 절차대로 Host가 배포한 신뢰 앵커·Context로 실행하고
+READY·후보 로그·Ctrl+C 종료를 확인한다. Sandbox의 localhost를 Host 주소로 쓰지 않는다.
+
 ## 남은 합의·연결
 
 1. CHANNEL_HELLO/ACK, EVENT_ACK, category별 SECURITY_EVENT의 필수/nullable·닫힌 스키마 및 ACK status.
 2. Control HELLO_ACK에서 전달되는 Telemetry 자격의 정확한 헤더·Scope·만료·재발급 계약.
 3. Bootstrap TLS 신뢰 앵커 배포, Windows 저장소 외 private CA 지원 필요 여부.
-4. `main.cpp`에서 실제 SessionContext·provider·Schema를 조립하고 상태·Coverage를 Host 정책에 연결.
+4. 로컬 Context 입력을 실제 Control HELLO_ACK 기반 provider·Schema로 교체하고 상태·Coverage를 Host 정책에 연결.
 5. 후속 Artifact Publisher에서 후보/무효화 이벤트를 변환. CandidateDetector 내부에 네트워크 책임을 넣지 않는다.
