@@ -32,6 +32,8 @@ std::string uuid_v4();
 std::string random_nonce();
 std::string utc_now();
 bool valid_utf8(const std::string& value);
+bool valid_uuid_v4(const std::string& value);
+void validate_utc_timestamp(const std::string& value);
 std::string json_text(const Json::Value& value);
 Json::Value parse_json(const std::string& text, std::size_t max_bytes);
 std::string serialize(const Envelope& envelope);

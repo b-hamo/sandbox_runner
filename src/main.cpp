@@ -107,8 +107,8 @@ int wmain(int argc, wchar_t* argv[]) {
     try {
         auto context = runner::load_session_context(context_path);
         // A Host adapter may implement both contracts. The current local
-        // handshake-only adapter has no candidate wire contract; report that
-        // explicitly rather than manufacturing payload fields.
+        // handshake-only input remains supported; event_contract selects the
+        // artifact adapter explicitly. No implicit wire contract fallback.
         auto candidate_contract = std::dynamic_pointer_cast<const runner::CandidateEventContract>(context.schema);
         auto telemetry = runner::start_telemetry(std::move(context), stop_event);
         std::cout << "Telemetry READY\n" << std::flush;
@@ -140,7 +140,12 @@ int wmain(int argc, wchar_t* argv[]) {
         // reject new Telemetry work, cancel WSS I/O and join its worker. Pending
         // events remain inspectable until client destruction; they are not ACKed.
         telemetry->stop();
-        if (telemetry->snapshot().pending_events)
+        const auto final_telemetry = telemetry->snapshot();
+        std::cout << "Telemetry final pending=" << final_telemetry.pending_events
+                  << " expired=" << final_telemetry.expired_events
+                  << " rejected=" << final_telemetry.rejected_events
+                  << " errors=" << final_telemetry.errors << '\n';
+        if (final_telemetry.pending_events)
             std::cerr << "Telemetry stopped with unacknowledged events.\n";
         std::cout << "Telemetry stopped\n";
     } catch (const std::exception& error) {

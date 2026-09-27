@@ -1,4 +1,6 @@
 #include "session_context.h"
+#include "artifact_candidate_adapter.h"
+#include "protocol/scrp/artifact_candidate.h"
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -36,7 +38,7 @@ std::wstring wide(const Json::Value& value) {
 // Local injection adapter only. The caller supplies exact handshake expectations;
 // no Host payload/status/authentication defaults are invented here. General Host
 // schemas should implement TelemetrySchema and inject SessionContext directly.
-// This adapter intentionally cannot publish events (outside this issue's scope).
+// The optional ArtifactCandidateAdapter supplies the event contract separately.
 class InjectedHandshake final : public scrp::TelemetrySchema {
     Json::Value hello_, status_, payload_;
 public:
@@ -85,7 +87,12 @@ SessionContext load_session_context(const std::wstring& path) {
     require(ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr) &&
             count <= 65536, "Cannot read session configuration or size exceeds limit");
     const auto root = scrp::parse_json(std::string(buffer.data(), count), 65536);
-    fields(root, {"session_id", "runtime_id", "generation", "endpoint", "credential", "tls", "handshake"});
+    if (root.isMember("event_contract")) {
+        fields(root, {"session_id", "runtime_id", "generation", "endpoint", "credential", "tls", "handshake", "event_contract"});
+        require(root["event_contract"] == scrp::artifact_candidate_contract, "Unsupported event contract");
+    } else {
+        fields(root, {"session_id", "runtime_id", "generation", "endpoint", "credential", "tls", "handshake"});
+    }
     SessionContext context;
     context.session.session_id = text(root["session_id"]);
     context.session.runtime_id = text(root["runtime_id"]);
@@ -111,6 +118,8 @@ SessionContext load_session_context(const std::wstring& path) {
         std::chrono::system_clock::time_point(std::chrono::seconds(expiry.asInt64()))};
     context.credential = [supplied] { return supplied; };
     context.schema = std::make_shared<InjectedHandshake>(root["handshake"]);
+    if (root.isMember("event_contract"))
+        context.schema = std::make_shared<ArtifactCandidateAdapter>(context.schema);
     validate_session_context(context);
     return context;
 }

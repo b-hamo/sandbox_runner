@@ -64,8 +64,9 @@ ARTIFACT_CANDIDATE "reports\\result.txt" generation=4 error=0 stable observation
 이 로그 자체는 SCRP 메시지가 아니다. Issue #9에서 같은 콜백을 Runner 조립 계층의
 `CandidateTelemetry`에도 연결했다. 외부 `CandidateEventContract`가 제공되면
 `SECURITY_EVENT`의 category `ARTIFACT_CANDIDATE`로 변환해 기존 TelemetryClient에 enqueue한다.
-경로·후보 ID·무효화 wire 필드는 외부 계약을 따르며 기본값을 만들지 않는다.
-현재 로컬 handshake-only Context는 후보 계약이 없어 미전송 진단을 출력한다.
+Issue #11의 명시적 artifact-candidate-v1 선택은 event_id로 관찰을 식별하고 relative_path를 전송한다.
+별도 candidate_id와 무효화 wire 전송은 없다. [계약 문서](artifact-candidate-contract.md)를 따른다.
+선택하지 않은 로컬 handshake-only Context는 후보 계약이 없어 미전송 진단을 출력한다.
 연결·중복·무효화·종료 순서는 [구조 문서](project-structure.md)를 따른다.
 
 ## 경계와 종료

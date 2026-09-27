@@ -3,6 +3,8 @@
 Issue #5의 일반 `SECURITY_EVENT` 전송 기반을 Issue #7에서 Runner 시작·종료에 연결했다.
 제품 EXE는 외부 Session Context로 Telemetry를 시작하고 READY 확인 뒤 Artifact 감시를 시작한다.
 Issue #9의 `CandidateTelemetry`가 외부 후보 계약을 통해 기존 enqueue에 연결한다.
+Issue #11의 `ArtifactCandidateAdapter`는 명시적으로 선택한 artifact-candidate-v1 계약안으로
+제품 실행의 후보 전송·저장 ACK를 활성화한다. [계약·예제·합의 상태](artifact-candidate-contract.md)를 따른다.
 업로드·Control HELLO_ACK는 미구현이며 기존 Artifact 모듈 책임은 유지한다.
 
 ## Runner Session Context 입력과 lifecycle
@@ -33,7 +35,7 @@ READY 이후 재연결은 기존 Client 정책이며 Host의 장애 대응·Cove
 ```
 
 `--session-context`는 필수다. `--output` 생략 시 READY 후 기본 세션 Output을 준비한다.
-입력 파일은 최대 64 KiB의 UTF-8 JSON object이며, 아래 필드는 모두 필요하다.
+입력 파일은 최대 64 KiB의 UTF-8 JSON object이며, 아래 필드는 event_contract를 제외하고 모두 필요하다.
 설정 객체의 중복·알 수 없는 key, 잘못된 타입, 누락은 실패한다. handshake payload의 필드는
 외부 계약이 정한다. 파일 경로는 Unicode를 지원한다.
 
@@ -49,6 +51,7 @@ READY 이후 재연결은 기존 Client 정책이며 Host의 장애 대응·Cove
 | `handshake.hello_payload` | 외부 계약의 CHANNEL_HELLO payload object |
 | `handshake.ack_status` | 기대 CHANNEL_ACK status 문자열 또는 null |
 | `handshake.ack_payload` | 기대 CHANNEL_ACK payload object 전체 |
+| `event_contract` | 선택 필드. `"artifact-candidate-v1"`만 허용. 생략 시 기존 handshake-only 입력, null·다른 값은 실패 |
 
 이 파일 형식은 **로컬 주입용**이며 SCRP/Control wire 스키마를 확정하지 않는다.
 인증 헤더·테스트 ID·토큰·ACK 성공값을 제품 기본값으로 제공하지 않는다.
@@ -56,11 +59,13 @@ READY 이후 재연결은 기존 Client 정책이며 Host의 장애 대응·Cove
 error가 null인지 검사한다. Client가 Envelope의 세션·상관 ID·connection_id 등을 추가 검증한다.
 ACK payload에 동적 connection_id 등이 있으면 이 단순 adapter만으로 일반 Host 계약을 표현할 수 없다.
 이 경우 향후 Control 입력에서 실제 `TelemetrySchema` 구현과 Context를 직접 주입한다.
-로컬 adapter는 SECURITY_EVENT/EVENT_ACK를 지원하지 않으며 해당 API 사용을 명시적으로 거부한다.
-이는 테스트용 handshake 계약이 제품 이벤트 계약으로 확장되는 것을 방지한다.
-Issue #9의 변환 계층은 계약 누락과 각 후보의 미전송을 명시적으로 진단한다.
-실제 Host 연동 시 `TelemetrySchema`와 `runner::CandidateEventContract`를 함께 구현한 adapter를
-Context.schema로 주입한다. 로컬 JSON에 임의의 payload 템플릿이나 ACK 기본값을 추가하지 않았다.
+`event_contract`를 생략하면 로컬 adapter는 SECURITY_EVENT/EVENT_ACK를 지원하지 않고
+변환 계층이 계약 누락과 각 후보의 미전송을 진단한다. 명시적으로 artifact-candidate-v1을 선택하면
+`load_session_context()`가 handshake adapter를 `ArtifactCandidateAdapter`로 감싸 Context.schema에 넣는다.
+제품의 기존 dynamic_pointer_cast·Candidate 콜백이 이를 사용하며 별도 테스트 전용 주입이 필요 없다.
+payload·ACK는 계약 문서의 닫힌 스키마를 사용하고 로컬 JSON에 임의 payload 템플릿을 받지 않는다.
+선택명만으로 Host 합의 완료를 뜻하지 않는다. handshake ACK payload가 비어 있으면 Envelope의
+동적 connection_id를 사용할 수 있다. 계약의 해당 예제를 참고한다.
 
 파일은 credential을 포함하므로 신뢰된 launcher가 해당 세션만 읽을 수 있게 배치하고 수명을 관리한다.
 Runner는 내용을 로그로 출력하거나 trust anchor를 설치하지 않는다. CLI에는 토큰 대신 파일 경로만 준다.
@@ -133,13 +138,15 @@ Runner는 Host 내부 저장을 직접 검증하지 않고 해당 계약에 따�
 | 단계 | 현재 코드에서 확인하는 의미 |
 | --- | --- |
 | enqueue accepted/duplicate | 로컬 Pending에 이벤트가 수용되었거나 동일 이벤트가 이미 존재함 |
-| 유효한 EVENT_ACK | Host의 보안 이벤트 저장 확인. 해당 Pending 제거·재전송 종료 |
+| 유효한 저장 성공 EVENT_ACK (`STORED`) | Host의 보안 이벤트 저장 확인. 해당 Pending 제거·재전송 종료 |
 | Artifact Broker Candidate 등록 완료 | 별도의 업무 처리 결과. 현재 ACK로 추론하지 않으며 Runner에 확인 상태 없음 |
 
 `CandidateTelemetry::Entry::accepted`는 첫 단계만 나타낸다. ACK를 받아도 후보가
 등록·승인되었다고 표시하거나 파일 전송을 시작하지 않는다. Host 이벤트 저장 후 Broker 등록이
 실패하는 경우의 내부 재처리·등록 결과 통지, 새 후보의 대체 규칙·무효화 표현은 후속 Host 계약에서
 결정해야 한다. Issue #9는 별도 등록 ACK나 무효화 wire 타입을 정의하지 않는다.
+Issue #11의 명시적 저장 거부 ACK (`REJECTED`)는 저장 확인이 아니며 Pending을 유지한다.
+정확한 스키마와 재시도·만료 정책은 [계약 문서](artifact-candidate-contract.md)의 EVENT_ACK 절을 따른다.
 
 ## 제한·장애·종료
 
@@ -277,6 +284,35 @@ cmake -S . -B build/issue9 -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/issue9
 ```
 
+### Issue #11 검증 결과 (2026-09-27)
+
+UCRT64 Release 제품 빌드와 전체 로컬 CTest **9/9 통과**(78.37초).
+기존 7개 테스트를 유지하고 `artifact_contract`, `artifact_runner_wss`를 추가했다.
+
+- 제품 payload 생성·검증: 필드 누락/추가/null·잘못된 ID/시각·경로·UTF-8 거부, Unicode 상대 경로 보존.
+- 실제 Context 파일의 계약 선택·생략 호환성·알 수 없는 선택값 거부, 제품 adapter 타입 연결.
+- fake socket으로 정상 저장, ACK 전 연결 끊김, 저장 거부와 잘못된 ACK/상관 ID/이벤트 ID 구분,
+  Pending 유지·제한된 재전송·재시도 소진 후 만료 확인. 재전송 event_id/payload 유지와 새 message_id 확인.
+- 실제 `sandbox_runner.exe` + loopback TLS/WSS peer에서 네 시나리오 통과:
+  정상 저장, ACK 전 연결 끊김, 일회성 저장 거부, 잘못된 ACK 이후 정상 재시도.
+  각 실행에서 열린 쓰기 핸들 동안 미전송 → 안정화·전송 → 파일 재수정 후 새 event_id → 저장 ACK →
+  Ctrl+C 종료를 검증했다. 최종 로그의 `pending=0 expired=0 rejected=0`을 확인해 만료·폐기로
+  Pending이 사라진 경우와 구분했다. 마지막 snapshot은 worker join 후 출력한다.
+- 기존 handshake-only 실행·TLS 거부·WSS·Candidate·lifecycle 회귀 통과.
+- 임시 Root 인증서 제거 및 제품/전송 probe 프로세스 잔존 없음 확인.
+
+제품 EXE는 strip 전 3,551,749바이트이며 Windows 기본 DLL에만 의존한다.
+MSYS2를 PATH에서 제외한 PowerShell `--help` 실행이 성공했고, 도움말 5회 실행은
+약 21.0/13.1/11.6/12.2/12.2ms였다. Host 로컬 시작 측정이며 Sandbox·handshake 성능 측정은 아니다.
+기존 symlink 검사는 권한 부족(Win32 1314)으로 건너뛰었으며 junction 검사는 통과했다.
+실제 Windows Sandbox와 팀 Host 호환성은 미검증이다. Host 공유 위치는 미정이므로 계약 문서에
+공유·합의 대기를 기록했으며, 외부 공유를 수행했다고 간주하지 않는다.
+
+테스트 파일과 테스트 CMake는 기존 정책대로 로컬 `tests/`에만 보관한다. 위 로컬 검증 명령을
+사용하며, 제품 빌드는 `cmake -S . -B build/issue11 -G Ninja -DCMAKE_BUILD_TYPE=Release`와
+`cmake --build build/issue11`로 재현한다. 전체 9개 검증에는 RUNNER_TEST_LOCAL_TLS=ON과
+cryptography가 설치된 Windows Python이 필요하다.
+
 ## 남은 합의·연결
 
 Issue #9의 계약 주입은 C++ Host adapter에 적용한다. 기존 `TelemetrySchema`를 변경하지 않고
@@ -289,8 +325,8 @@ Issue #9의 계약 주입은 C++ Host adapter에 적용한다. 기존 `Telemetry
 무효화 계약이 없다면 `invalidation_payload()`는 null을 반환한다. 로컬 무효화는 계속 적용되지만
 Host 전달을 보장하거나 새로운 무효화 타입을 발명하지 않는다.
 
-1. CHANNEL_HELLO/ACK, EVENT_ACK, category별 SECURITY_EVENT의 필수/nullable·닫힌 스키마 및 ACK status.
+1. artifact-candidate-v1 payload·ACK 계약안의 Host 공유·합의 및 호환성 검증. 다른 category의 스키마는 별도 계약.
 2. Control HELLO_ACK에서 전달되는 Telemetry 자격의 정확한 헤더·Scope·만료·재발급 계약.
 3. Bootstrap TLS 신뢰 앵커 배포, Windows 저장소 외 private CA 지원 필요 여부.
 4. 로컬 Context 입력을 실제 Control HELLO_ACK 기반 provider·Schema로 교체하고 상태·Coverage를 Host 정책에 연결.
-5. 구현된 CandidateTelemetry에 Host 후보/무효화 계약을 제공한다. CandidateDetector 내부에 네트워크 책임을 넣지 않는다.
+5. 후보 등록·무효화 wire 계약은 후속 작업으로 유지한다. CandidateDetector 내부에 네트워크 책임을 넣지 않는다.

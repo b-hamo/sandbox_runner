@@ -7,8 +7,9 @@ Issue #5에서 Artifact와 독립적인 Telemetry 전송 계층을 구현했다.
 스키마·인증 헤더는 외부 계약으로 주입한다. Issue #7에서 외부 Session Context 검증과
 Telemetry 시작·READY 확인·종료를 제품 진입점에 연결했다. Control HELLO_ACK는 아직 미구현이다.
 Issue #9에서 Candidate 콜백과 TelemetryClient 사이에 `CandidateTelemetry` 변환 계층을 연결했다.
-Host의 후보·무효화 wire 계약은 미확정이므로 `CandidateEventContract`로 외부 주입한다.
-현재 로컬 handshake-only Context에는 이 계약이 없어 미전송 진단을 출력한다.
+Issue #11에서 `artifact-candidate-v1` payload·ACK 계약안과 제품 `ArtifactCandidateAdapter`를 구현했다.
+로컬 Context의 명시적 `event_contract` 선택으로 실제 후보 전송을 활성화한다. 미선택 시 기존
+handshake-only 동작을 유지한다. Host 공유·합의 상태는 [계약 문서](artifact-candidate-contract.md)에 기록한다.
 제품 실행 파일은 `sandbox_runner.exe` 하나이며, Control과 Artifact를 같은 실행 파일에 통합한다.
 후속 구조에 적힌 디렉터리·클래스는 구현 위치에 대한 제안이며 현재 존재하는 코드가 아니다.
 
@@ -43,9 +44,11 @@ sandbox_runner/
 │  ├─ session_context.h / session_context.cpp
 │  ├─ runner_lifecycle.h / runner_lifecycle.cpp
 │  ├─ candidate_telemetry.h / candidate_telemetry.cpp
+│  ├─ artifact_candidate_adapter.h / artifact_candidate_adapter.cpp
 │  ├─ protocol/scrp/
 │  │  ├─ envelope.h / envelope.cpp
-│  │  └─ telemetry_messages.h / telemetry_messages.cpp
+│  │  ├─ telemetry_messages.h / telemetry_messages.cpp
+│  │  └─ artifact_candidate.h / artifact_candidate.cpp
 │  ├─ transport/telemetry/
 │  │  ├─ telemetry_client.h / telemetry_client.cpp
 │  │  ├─ pending_event_store.h / pending_event_store.cpp
@@ -60,6 +63,7 @@ sandbox_runner/
 └─ docs/
    ├─ project-structure.md
    ├─ artifact-candidates.md
+   ├─ artifact-candidate-contract.md
    └─ telemetry.md
 ```
 
@@ -74,11 +78,13 @@ sandbox_runner/
 | `src/session_context.*` | 기존 `telemetry::Context`를 `runner::SessionContext`로 재사용, 사전 검증·명시적 로컬 JSON 입력 |
 | `src/runner_lifecycle.*` | 주입 Context로 Client 생성·시작, 취소 가능한 READY 대기, 실패 시 RAII 정리 |
 | `src/candidate_telemetry.*` | Candidate 콜백의 중복·무효화 추적, 외부 계약으로 SecurityEvent 변환, 기존 Client enqueue·거부 진단 |
+| `src/artifact_candidate_adapter.*` | 기존 handshake schema를 유지하면서 CandidateEventContract·TelemetrySchema의 후보 payload·ACK 연결 |
 | `src/artifact/output_watcher.*` | Windows 변경 알림의 재귀 감시, 경로 경계, 감시 오류·취소 처리 |
 | `src/artifact/candidate_detector.*` | 이벤트 큐·worker, 파일별 debounce·관찰 일정, 변경 세대·후보 상태·무효화 관리 |
 | `src/artifact/file_stability.*` | 허용된 일반 파일 접근, 경로 체인 검증, 쓰기 공유 제한, 파일 정보 관찰·비교 |
 | `src/protocol/scrp/envelope.*` | 공통 Envelope, JSON 검증·직렬화, UUIDv4·nonce·UTC 시각 |
 | `src/protocol/scrp/telemetry_messages.*` | 일반 SecurityEvent와 외부 TelemetrySchema 계약, HELLO·이벤트 생성 |
+| `src/protocol/scrp/artifact_candidate.*` | artifact-candidate-v1 payload 생성·닫힌 스키마 검증, 저장 성공·거부 ACK 해석 |
 | `src/transport/telemetry/telemetry_client.*` | 전용 worker, 채널 바인딩, ACK 검증, 상태·재연결·재전송·종료 |
 | `src/transport/telemetry/pending_event_store.*` | 미확인 이벤트 보관, 중복·충돌·용량 제한, 명시적 만료 |
 | `src/transport/telemetry/winhttp_websocket.*` | WinHTTP 비동기 WSS, 인증 헤더 주입, TLS 검증, 프레임 재조립·취소 |
@@ -93,6 +99,7 @@ sandbox_runner/
 ```text
 main.cpp
   ├─ --session-context 로컬 파일 → runner::SessionContext 검증
+  │    └─ event_contract 선택 → InjectedHandshake를 ArtifactCandidateAdapter로 감쌈
   ├─ start_telemetry() → Client worker → WSS → CHANNEL_HELLO/ACK → READY
   ├─ Output 경로 준비
   ├─ CandidateDetector 생성 → worker 시작
@@ -109,7 +116,8 @@ main.cpp
          ↓
      main.cpp 콜백 → CandidateTelemetry::submit() + 기존 콘솔 출력
          ↓ candidate 상태만 신규 후보 이벤트로 변환
-     CandidateEventContract::candidate_payload() (외부 Host 계약)
+     CandidateEventContract::candidate_payload() → ArtifactCandidateAdapter
+         ↓ scrp::artifact_candidate_payload() (명시적으로 선택한 계약안)
          ↓ SecurityEvent(event_id, observed_at, category=ARTIFACT_CANDIDATE)
      TelemetryClient::enqueue() → 기존 Pending → SECURITY_EVENT Envelope → WSS / EVENT_ACK
 ```
@@ -123,8 +131,9 @@ main.cpp
 후속 소비자는 후보 이벤트뿐 아니라 이후 변경과 무효화도 반영해야 한다.
 
 `ARTIFACT_CANDIDATE`는 외부 계약이 주입되면 기존 SECURITY_EVENT 경로로 전송한다.
-현재 로컬 `InjectedHandshake`는 후보 계약·EVENT_ACK를 제공하지 않으므로 콘솔과 미전송 진단만 남긴다.
-Host adapter는 기존 `TelemetrySchema`와 `runner::CandidateEventContract`를 함께 구현한다.
+로컬 Context에서 `event_contract: "artifact-candidate-v1"`을 선택하면 제품 adapter가
+후보 계약·EVENT_ACK를 제공한다. 선택하지 않으면 `InjectedHandshake`만 사용해 기존 미전송 진단을 남긴다.
+`ArtifactCandidateAdapter`는 기존 `TelemetrySchema`와 `runner::CandidateEventContract`를 함께 구현한다.
 `main.cpp`는 Context의 schema에서 해당 계약을 얻으며, 없는 경우 payload를 추측하지 않는다.
 안정화는 관찰 기반 판단이므로 최종 쓰기 완료·안전성·파일의 불변성을 보장하지 않는다.
 상세 조건과 제한은 [Artifact 후보 감지 문서](artifact-candidates.md)를 따른다.
@@ -174,13 +183,15 @@ Host의 Action 차단 정책이나 Coverage wire 연결은 후속 책임이다.
 `CandidateObservation`은 Output 기준 UTF-8 상대 경로, 로컬 `file_generation`, `event_id`,
 `observed_at`을 외부 계약에 전달하는 내부 타입이다. UUID와 UTC 시각은 기존 SCRP 유틸리티를
 사용하며, payload의 event_id·observed_at 일치와 ARTIFACT_CANDIDATE category를 확인한 뒤 enqueue한다.
-경로·candidate_id·파일 세대의 wire 필드명과 배치는 Host 계약 책임이다. 세션 정보는 기존 Envelope가 붙인다.
+Issue #11 계약안은 `event_id`, `observed_at`, `category`, `relative_path` 네 필드만 전송한다.
+별도 candidate_id·파일 세대는 전송하지 않는다. 세션 정보는 기존 Envelope가 붙인다.
 
 - 동일 경로(기존 감지기와 같은 Windows 대소문자 비교)·세대는 enqueue 성공 후 ACK가 끝나도 다시 보고하지 않는다.
 - pending·stabilizing은 신규 후보 이벤트를 생성하지 않는다. 쓰기 핸들 경합은 안정화 재시도 상태로 유지한다.
 - 재수정·삭제·rename은 기존 관찰을 로컬 무효화하고, 새 세대가 안정화되면 새 event_id로 보고한다.
 - 이미 보고된 후보의 무효화는 `invalidation_payload(previous, cause, event_id, observed_at)`에 위임한다.
   null을 반환하면 wire 미합의를 진단하고 로컬 무효화만 수행한다. 임의의 무효화 category를 만들지 않는다.
+  artifact-candidate-v1 adapter는 항상 null을 반환한다. 무효화 wire 전송은 #11 범위 밖이다.
 - 전역 unavailable(감시 오류·중지·worker 실패)은 모든 관찰을 무효화하고 추가 입력을 거부한다.
 - 경로별 상태 한도는 기본 4096이며 CandidateDetector 기본 한도와 같다. 사용자 지정 시 두 한도를 맞춘다.
   이전 세대의 관찰 payload나 파일 바이트는 보관하지 않는다.
@@ -241,7 +252,8 @@ Envelope·메시지 타입·payload·직렬화와 검증 규칙을 공통으로 
 Control·Telemetry에서 같은 규칙을 사용하며 Artifact 전용 코드에 Envelope를 중복 정의하지 않는다.
 소켓 연결이나 GUI 실행은 담당하지 않는다.
 현재 공통 Envelope와 Telemetry 메시지 생성이 구현되어 있다. 닫힌 payload 검증과 ACK 성공
-상태 해석은 호출자가 제공하는 `TelemetrySchema` 책임이다. 테스트 전용 스키마는
+상태 해석은 주입된 `TelemetrySchema` 책임이다. Issue #11의 명시적 선택은 제품
+artifact-candidate-v1 validator를 사용하며 기본 선택 없이 자동 적용하지 않는다. 별도 테스트 전용 스키마는
 Git에서 제외된 로컬 검증 코드에만 존재하며 제품 기본 스키마가 아니다.
 
 ### Control Transport: `src/transport/control/`
@@ -307,7 +319,7 @@ Guest가 지정한 임의 URL이나 임의 경로를 그대로 사용하는 범�
 
 ```text
 Runner 내부 후보 이벤트                         [현재 구현]
-    ↓ CandidateTelemetry + 외부 CandidateEventContract [변환 연결 구현, Host 계약 미확정]
+    ↓ CandidateTelemetry + ArtifactCandidateAdapter [제품 연결 구현, Host 합의 대기]
 SECURITY_EVENT(category = ARTIFACT_CANDIDATE)
     ↓ Telemetry WSS
 Host 이벤트 저장 → EVENT_ACK
@@ -336,15 +348,14 @@ Runner 내부 Output을 Host의 쓰기 가능한 공유 폴더로 매핑하지 �
 | --- | --- |
 | `CandidateStatus::generation` | 현재 구현된 로컬 파일 변경 세대. 후보 변경·무효화 추적용 |
 | SCRP Envelope `generation` | Host가 관리하는 Runtime 재생성 세대. 위 값으로 대체하면 안 됨 |
-| `candidate_id` | 후보를 전송 요청과 연결할 식별자. 현재 내부 상태에는 없음 |
+| `candidate_id` | Issue #11 계약에서는 별도로 사용하지 않음. 후속 요청 식별은 별도 계약 |
 | `event_id` | 현재 `SecurityEvent`의 ID. 후보 관찰마다 생성해 Pending·ACK·변환 계층의 중복 추적에 사용 |
 | `artifact_id` / `upload_id` | Host Artifact Broker가 발급할 파일 등록·업로드 식별자 |
 | `message_id` / `sequence_number` | Envelope 및 연결·송신 방향별 전송 식별. 파일 세대와 별개 |
 
 v0.1의 7쪽에는 후보 메타데이터에 해시가 포함되어 있다. 최신 설계에서는 Runner가 SHA-256을
-계산하지 않으므로, 후속 스키마에 이 변경을 반영해야 한다. 해시 필드를 생략할지 nullable로 둘지는
-Host와 합의하고 문서화한다. 임의의 해시나 빈 값을 유효한 해시처럼 전송하지 않는다.
-이 문서는 스키마를 임의로 확정하거나 기존 Envelope 필드를 다른 의미로 재사용하지 않는다.
+계산하지 않는다. Issue #11 계약안은 해시·MIME·크기 필드를 생략하며 null·빈 해시도 보내지 않는다.
+Host 합의는 대기 상태로 기록한다. 기존 Envelope 필드를 다른 의미로 재사용하지 않는다.
 
 ## 9. 빌드·배포 및 문서 관리
 
@@ -371,9 +382,9 @@ README는 프로젝트 개요·빌드 진입점, 이 문서는 구조와 책임 
 
 ## 10. 다음 작업
 
-1. 구현된 공용 Session Context에 실제 Host SCRP 스키마를 제공한다. 파일 세대·Runtime 세대 및 후보 해시 정책을 구분한다.
+1. 구현된 artifact-candidate-v1 계약안의 Host 공유·합의를 완료하고 실제 Host 호환성을 검증한다.
 2. Control handshake를 구현하고 HELLO_ACK의 Telemetry 자격·확정 스키마를 현재 Client에 연결한다.
-3. 구현된 CandidateTelemetry에 실제 Host 후보 식별·무효화 계약을 주입하고 상호 호환성을 검증한다.
+3. 후속 후보 등록·무효화 정책을 합의한다. EVENT_ACK를 Broker 등록 완료로 해석하지 않는다.
 4. 승인된 ARTIFACT_REQUEST 처리와 제한된 HTTPS 업로드를 구현한다.
 5. Host Quarantine의 검사·승인·반출과 연결해 전체 흐름을 검증한다.
 
