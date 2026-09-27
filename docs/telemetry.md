@@ -2,7 +2,8 @@
 
 Issue #5의 일반 `SECURITY_EVENT` 전송 기반을 Issue #7에서 Runner 시작·종료에 연결했다.
 제품 EXE는 외부 Session Context로 Telemetry를 시작하고 READY 확인 뒤 Artifact 감시를 시작한다.
-Artifact 후보 변환·업로드·Control HELLO_ACK는 미구현이며 기존 Artifact 모듈 책임은 유지한다.
+Issue #9의 `CandidateTelemetry`가 외부 후보 계약을 통해 기존 enqueue에 연결한다.
+업로드·Control HELLO_ACK는 미구현이며 기존 Artifact 모듈 책임은 유지한다.
 
 ## Runner Session Context 입력과 lifecycle
 
@@ -57,6 +58,9 @@ ACK payload에 동적 connection_id 등이 있으면 이 단순 adapter만으로
 이 경우 향후 Control 입력에서 실제 `TelemetrySchema` 구현과 Context를 직접 주입한다.
 로컬 adapter는 SECURITY_EVENT/EVENT_ACK를 지원하지 않으며 해당 API 사용을 명시적으로 거부한다.
 이는 테스트용 handshake 계약이 제품 이벤트 계약으로 확장되는 것을 방지한다.
+Issue #9의 변환 계층은 계약 누락과 각 후보의 미전송을 명시적으로 진단한다.
+실제 Host 연동 시 `TelemetrySchema`와 `runner::CandidateEventContract`를 함께 구현한 adapter를
+Context.schema로 주입한다. 로컬 JSON에 임의의 payload 템플릿이나 ACK 기본값을 추가하지 않았다.
 
 파일은 credential을 포함하므로 신뢰된 launcher가 해당 세션만 읽을 수 있게 배치하고 수명을 관리한다.
 Runner는 내용을 로그로 출력하거나 trust anchor를 설치하지 않는다. CLI에는 토큰 대신 파일 경로만 준다.
@@ -118,6 +122,24 @@ status, error, payload다. W1 문서 버전 v0.1과 wire version은 서로 다�
 재전송은 같은 event_id·observed_at·payload에 새로운 message_id·nonce·전송 시각·연결별 sequence를
 부여한다. 파일 변경 세대와 Runtime generation은 혼용하지 않는다. Host는 event_id로 중복 저장을
 방지해야 한다. ACK는 저장 확인이며 Artifact 승인·안전 판정이 아니다.
+
+### EVENT_ACK와 Candidate 등록의 구분
+
+현재 Runner의 `EVENT_ACK` 의미는 **Host의 SECURITY_EVENT 저장 확인**이다.
+단순한 소켓 수신 확인으로 취급하지 않으며, **Host Artifact Broker의 Candidate 등록 완료를
+의미하지 않는다.** 실제 ACK status·payload 검증은 주입된 `TelemetrySchema::event_ack()`의 책임이다.
+Runner는 Host 내부 저장을 직접 검증하지 않고 해당 계약에 따른 ACK를 신뢰한다.
+
+| 단계 | 현재 코드에서 확인하는 의미 |
+| --- | --- |
+| enqueue accepted/duplicate | 로컬 Pending에 이벤트가 수용되었거나 동일 이벤트가 이미 존재함 |
+| 유효한 EVENT_ACK | Host의 보안 이벤트 저장 확인. 해당 Pending 제거·재전송 종료 |
+| Artifact Broker Candidate 등록 완료 | 별도의 업무 처리 결과. 현재 ACK로 추론하지 않으며 Runner에 확인 상태 없음 |
+
+`CandidateTelemetry::Entry::accepted`는 첫 단계만 나타낸다. ACK를 받아도 후보가
+등록·승인되었다고 표시하거나 파일 전송을 시작하지 않는다. Host 이벤트 저장 후 Broker 등록이
+실패하는 경우의 내부 재처리·등록 결과 통지, 새 후보의 대체 규칙·무효화 표현은 후속 Host 계약에서
+결정해야 한다. Issue #9는 별도 등록 ACK나 무효화 wire 타입을 정의하지 않는다.
 
 ## 제한·장애·종료
 
@@ -229,10 +251,46 @@ Python은 `cryptography`가 필요하다. WSS 테스트는 매번 생성한 테�
 실제 Sandbox 재현은 README의 절차대로 Host가 배포한 신뢰 앵커·Context로 실행하고
 READY·후보 로그·Ctrl+C 종료를 확인한다. Sandbox의 localhost를 Host 주소로 쓰지 않는다.
 
+### Issue #9 검증 결과 (2026-09-27)
+
+UCRT64 Release 제품 빌드 및 전체 로컬 CTest **7/7 통과**(53.25초).
+기존 6개 회귀 테스트와 `candidate_telemetry`를 실행했다. 추가 검증은 실제 서버 없이
+기존 SocketFactory seam과 fake WebSocket, 실제 Output 감시·파일 안정화를 함께 사용한다.
+
+- pending·stabilizing·열린 쓰기 핸들에서는 후보 이벤트 미전송, 확정 후 UTF-8 상대 경로·시각 전달.
+- READY 이전 Pending, SECURITY_EVENT Envelope·세션/Runtime generation 유지, ACK 후 중복 억제.
+- ACK 전 연결 끊김 재전송에서 event_id·payload 유지, 새 Envelope 사용.
+- 재수정·rename·삭제·전역 무효화, 오래된 세대 억제, 무효화 wire 계약 미정 진단.
+- 계약 누락·변환 예외·스키마 거부·버퍼/이벤트 한도·상태 한도·종료 후 거부, 잘못된 경로·Unicode.
+- watcher 종료 → detector join → bridge 소멸 → Telemetry 종료, 예외 unwind 및 join 후 콜백 없음.
+- 실제 EXE의 기존 handshake-only WSS·Ctrl+C 회귀 유지. 이 입력은 후보 wire 계약이 없어 전송하지 않는다.
+
+제품 EXE는 strip 전 3,530,121바이트이며 Windows 기본 DLL에만 의존한다.
+MSYS2 터미널 밖 PowerShell에서 `--help` 실행을 확인했다. 기존 symlink 검사는 권한 부족
+(Win32 1314)으로 건너뛰었으며 junction 검사는 통과했다. 실제 Windows Sandbox와 팀 Host의
+확정 payload/ACK 계약 호환성은 미검증이다. 테스트는 기존 정책대로 Git 제외 `tests/`에 보관한다.
+
+재현 명령은 위 로컬 CMake/CTest 절차를 따르며 제품만 빌드하려면 다음을 사용한다.
+
+```bash
+cmake -S . -B build/issue9 -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/issue9
+```
+
 ## 남은 합의·연결
+
+Issue #9의 계약 주입은 C++ Host adapter에 적용한다. 기존 `TelemetrySchema`를 변경하지 않고
+같은 adapter가 `runner::CandidateEventContract`도 구현한다. `main.cpp`는 schema를
+`dynamic_pointer_cast<const runner::CandidateEventContract>`로 얻어 변환 계층에 전달한다.
+직접 조립하는 호출자는 같은 계약과 Client를 `CandidateTelemetry` 생성자에 전달해도 된다.
+계약의 두 payload 함수는 제공된 event_id·observed_at을 그대로 사용하고, 동일 관찰 재시도에는
+같은 payload를 반환해야 한다. category·경로·후보 식별과 무효화 필드는 Host 합의대로 매핑한다.
+후보 이벤트의 category는 변환 계층이 ARTIFACT_CANDIDATE인지 추가 검증한다.
+무효화 계약이 없다면 `invalidation_payload()`는 null을 반환한다. 로컬 무효화는 계속 적용되지만
+Host 전달을 보장하거나 새로운 무효화 타입을 발명하지 않는다.
 
 1. CHANNEL_HELLO/ACK, EVENT_ACK, category별 SECURITY_EVENT의 필수/nullable·닫힌 스키마 및 ACK status.
 2. Control HELLO_ACK에서 전달되는 Telemetry 자격의 정확한 헤더·Scope·만료·재발급 계약.
 3. Bootstrap TLS 신뢰 앵커 배포, Windows 저장소 외 private CA 지원 필요 여부.
 4. 로컬 Context 입력을 실제 Control HELLO_ACK 기반 provider·Schema로 교체하고 상태·Coverage를 Host 정책에 연결.
-5. 후속 Artifact Publisher에서 후보/무효화 이벤트를 변환. CandidateDetector 내부에 네트워크 책임을 넣지 않는다.
+5. 구현된 CandidateTelemetry에 Host 후보/무효화 계약을 제공한다. CandidateDetector 내부에 네트워크 책임을 넣지 않는다.

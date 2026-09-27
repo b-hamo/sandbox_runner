@@ -18,7 +18,10 @@ public:
     virtual Json::Value channel_hello(const SessionContext&) const = 0;
     virtual void validate_event(const SecurityEvent&) const = 0;
     virtual std::string channel_ack(const Envelope&) const = 0; // validated connection_id
-    virtual std::string event_ack(const Envelope&) const = 0; // validated stored event_id
+    // Confirms Host security-event storage under the injected contract, not
+    // Artifact Broker candidate registration, upload approval or file safety.
+    // The client uses the returned event_id only to remove its Pending event.
+    virtual std::string event_ack(const Envelope&) const = 0;
 };
 void validate_event_identity(const SecurityEvent& event);
 Envelope channel_hello(const SessionContext& session, const TelemetrySchema& schema);

@@ -61,9 +61,12 @@ Host 검사나 통신 구현을 Runner로 옮기지 않는다.
 ARTIFACT_CANDIDATE "reports\\result.txt" generation=4 error=0 stable observations; candidate only, Host Quarantine verification required
 ```
 
-이 로그는 SCRP 메시지가 아니다. 향후 확정된 계약에 연결할 때 기존 설계에 따라
-`SECURITY_EVENT`의 category `ARTIFACT_CANDIDATE`에 매핑한다. 새로운 최상위 wire 타입이나
-JSON 필드, 업로드 기능은 이번 변경에서 정의하지 않는다.
+이 로그 자체는 SCRP 메시지가 아니다. Issue #9에서 같은 콜백을 Runner 조립 계층의
+`CandidateTelemetry`에도 연결했다. 외부 `CandidateEventContract`가 제공되면
+`SECURITY_EVENT`의 category `ARTIFACT_CANDIDATE`로 변환해 기존 TelemetryClient에 enqueue한다.
+경로·후보 ID·무효화 wire 필드는 외부 계약을 따르며 기본값을 만들지 않는다.
+현재 로컬 handshake-only Context는 후보 계약이 없어 미전송 진단을 출력한다.
+연결·중복·무효화·종료 순서는 [구조 문서](project-structure.md)를 따른다.
 
 ## 경계와 종료
 
@@ -91,4 +94,5 @@ JSON 필드, 업로드 기능은 이번 변경에서 정의하지 않는다.
 - 제품 EXE는 Windows 기본 DLL에만 의존하며 Defender/CNG 라이브러리 의존성을 제거함.
 - 새로 생성한 Sandbox에서도 로그인 준비 후 `sandbox_candidate_check.ps1`를 실행해 종료 코드 0을 확인함. 두 테스트 EXE의 성공, 실제 Runner 후보 로그·Ctrl+C 종료, 새 잔존 Runner 없음이 함께 검증됨. 해당 실행 로그는 Sandbox 바탕 화면의 `runner-candidate-check-20260927-032451` 폴더에 있음(해당 Sandbox 종료 시 삭제됨).
 
-Host Quarantine의 검사와 전송·SCRP 연동은 이 저장소의 현재 테스트 범위가 아니다.
+위 결과는 후보 감지 구현 당시 이력이다. Issue #9의 SCRP 연결 검증은
+[Telemetry 문서](telemetry.md)에 기록한다. Host Quarantine 검사와 파일 업로드는 여전히 범위 밖이다.
