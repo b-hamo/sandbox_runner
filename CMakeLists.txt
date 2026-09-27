@@ -19,7 +19,18 @@ if(RUNNER_BUILD_TESTS)
 endif()
 
 # Single product executable. Connect future Control sources to this target.
-add_executable(sandbox_runner src/main.cpp src/artifact/output_watcher.cpp)
+set(ARTIFACT_CANDIDATE_SOURCES src/artifact/candidate_detector.cpp src/artifact/file_stability.cpp)
+add_executable(sandbox_runner src/main.cpp src/artifact/output_watcher.cpp ${ARTIFACT_CANDIDATE_SOURCES})
+
+if(RUNNER_BUILD_TESTS)
+    add_executable(candidate_tests tests/candidate_tests.cpp src/artifact/output_watcher.cpp ${ARTIFACT_CANDIDATE_SOURCES})
+    target_include_directories(candidate_tests PRIVATE src)
+    if(MINGW)
+        target_link_options(candidate_tests PRIVATE -static)
+    endif()
+    add_test(NAME artifact_candidate COMMAND candidate_tests)
+    set_tests_properties(artifact_candidate PROPERTIES TIMEOUT 45)
+endif()
 
 # Keep the initial Runner executable independent of the host's MinGW DLLs.
 if(MINGW)

@@ -1,4 +1,5 @@
 #include "artifact/output_watcher.h"
+#include "artifact/candidate_detector.h"
 #include "runner_paths.h"
 #include <iostream>
 #include <cwchar>
@@ -51,6 +52,13 @@ void report(const artifact::OutputChange& change) {
     }
     std::cout << kind << " \"" << utf8(change.name) << "\"" << std::endl;
 }
+
+void report_candidate(const artifact::CandidateStatus& status) {
+    std::cout << (status.state == artifact::CandidateState::candidate ? "" : "ARTIFACT ")
+              << artifact::candidate_state_name(status.state) << " \"" << utf8(status.path)
+              << "\" generation=" << status.generation << " error=" << status.error
+              << " " << status.detail << std::endl;
+}
 } // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
@@ -90,7 +98,16 @@ int wmain(int argc, wchar_t* argv[]) {
     }
     DWORD result = ERROR_GEN_FAILURE;
     try {
-        result = artifact::watch_output(output_path, stop_event, report);
+        artifact::CandidateDetector candidates(output_path, report_candidate, report);
+        try {
+            result = artifact::watch_output(output_path, stop_event,
+                [&candidates](const artifact::OutputChange& change) { candidates.submit(change); });
+        } catch (...) {
+            candidates.invalidate(ERROR_GEN_FAILURE);
+            throw;
+        }
+        if (result != ERROR_SUCCESS) candidates.invalidate(result);
+        candidates.stop();
     } catch (const std::exception& error) {
         std::cerr << "Watch exception: " << error.what() << '\n';
     }

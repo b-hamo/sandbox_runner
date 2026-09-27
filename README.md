@@ -9,6 +9,8 @@ Sandbox 하나를 세션 하나로 사용한다. 인자 없이 실행하면 `C:\
 - `src/main.cpp`: 공통 실행 진입점, `--output` 입력, 로그 및 Ctrl+C/Ctrl+Break 종료.
 - `src/runner_paths.h`: 세션의 고정 Output 경로. C++ 구성 요소는 이 상수를 공유한다.
 - `src/artifact/output_watcher.{h,cpp}`: Windows `ReadDirectoryChangesW` 기반 감시.
+- `src/artifact/candidate_detector.{h,cpp}`: 기존 이벤트 큐를 재사용한 파일별 debounce·안정화·세대·후보 상태 관리.
+- `src/artifact/file_stability.{h,cpp}`: 기존 경로 검증과 파일 메타데이터 비교를 분리한 안정화 관찰.
 - `tests/output_watcher_tests.cpp`: 실제 Windows 파일 이벤트 및 EXE 종료 테스트.
 - `CMakeLists.txt`: 단일 Runner와 선택적 테스트 실행 파일을 빌드한다.
 
@@ -27,8 +29,11 @@ Sandbox 하나를 세션 하나로 사용한다. 인자 없이 실행하면 `C:\
 테스트 소스는 검증 절차를 공유하기 위해 Git에 포함하며, 테스트 중 생성되는 임시 파일과 구분한다.
 
 향후 Control과 Artifact의 구현 소스를 같은 실행 타깃에 연결한다.
-이번 [이슈 #1](https://github.com/b-hamo/sandbox_runner/issues/1)은 파일 감시만 구현한다.
-GUI 제어, SCRP, 파일 쓰기 완료 판정, Candidate 등록, 검사 및 업로드는 포함하지 않는다.
+[이슈 #1](https://github.com/b-hamo/sandbox_runner/issues/1)의 감시 기능에
+[이슈 #3](https://github.com/b-hamo/sandbox_runner/issues/3)의 최신 설계 변경에 따라 파일 안정화와 Artifact 후보 보고를 연결한다.
+Runner는 Defender 검사와 SHA-256/MIME/크기 검증을 수행하지 않는다. 이 검증은 Host Quarantine의 책임이다.
+GUI 제어, SCRP 전송, 업로드 및 Host의 최종 반출 승인은 포함하지 않는다.
+안정화 판단·후보 이벤트·제한·검증 결과는 [후보 감지 문서](docs/artifact-candidates.md)를 따른다.
 C++ 표준 버전은 팀 합의 전까지 CMake에서 고정하지 않으며 사용 중인 컴파일러 기본값을 따른다.
 
 ## 감시 동작과 경계
@@ -65,7 +70,10 @@ Host에 쓰기 가능한 공유 폴더로 매핑하지 않는다.
 `ready`는 첫 감시 요청을 등록한 뒤 전달한다. 콜백은 짧게 처리하고, 후속 모듈의 큐에 연결할 수 있다.
 호출자는 수동 리셋 종료 이벤트를 소유하며 함수가 반환할 때까지 유지한다.
 Control 내부 구현에 의존하지 않으며 자체 작업 스레드를 만들지 않는다.
+Runner는 이 감시 콜백에서 `CandidateDetector::submit()`만 호출한다. 별도 작업 스레드가
+파일 안정화를 관찰하고 `ARTIFACT_CANDIDATE` 이벤트와 변경·무효화 상태를 출력한다.
 반환값은 정상 중지 시 `ERROR_SUCCESS`, 실패 시 Win32 오류 코드다.
+감시 실패 시 후보 큐와 이전 결과도 무효화한다. 정상 종료 시 작업 스레드의 대기를 깨우고 합류한다.
 파일 접근·전송을 추가할 때에는 세션과 경로를 다시 검증해야 한다. 알림은 파일 완성이나 안전 판정이 아니다.
 
 ## Host에서 빌드 및 실행
@@ -143,6 +151,9 @@ ctest --test-dir build --output-on-failure -V
 반복 시작·중지와 핸들 수, 숨겨진 콘솔의 실제 Runner Ctrl+C 종료를 검증한다.
 정확한 이벤트 횟수가 아닌 제한 시간 내 기대 이벤트 존재를 검사한다.
 심볼릭 링크를 만들 권한이 없으면 해당 테스트는 `SKIP`을 출력한다.
+`artifact_candidate` 테스트는 변경 묶음 처리, 안정화 중 재변경·삭제·이름 변경,
+쓰기 잠금 재시도·시간 초과, 경로 경계, junction·ADS·hardlink 제외, 감시 누락·큐 초과와 종료를 확인한다.
+실제 Runner가 안정화된 파일의 `ARTIFACT_CANDIDATE`를 출력하는 것도 검증한다. Defender 설치·실행은 필요 없다.
 
 Junction 거부는 PowerShell에서 별도로 재현할 수 있다:
 
@@ -176,7 +187,8 @@ Sandbox 강제 종료 시의 정상 정리 완료는 보장하지 않는다.
 현재 개발 환경에서는 UCRT64 Release 빌드와 Host Windows 통합 테스트를 통과했다.
 MSYS2/MinGW를 PATH에서 뺀 PowerShell에서도 EXE 및 통합 테스트를 실행했다.
 Junction 자체와 상위 Junction 경로 거부를 확인했다. 심볼릭 링크 테스트는 권한 부족(1314)으로 건너뛰었다.
-실제 Windows Sandbox 실행, 강제 버퍼 초과 및 디스크 오류 재현은 아직 검증하지 않았다.
+실제 Windows Sandbox에서도 후보 감지·감시 테스트와 Runner 후보 로그·Ctrl+C 종료를 확인했다.
+OS 감시 버퍼 강제 초과 및 디스크 오류 재현은 아직 검증하지 않았다. 내부 큐 초과는 테스트했다.
 
 ## 후속 합의
 
