@@ -2,6 +2,7 @@
 #include "artifact/candidate_detector.h"
 #include "runner_paths.h"
 #include "runner_lifecycle.h"
+#include "candidate_telemetry.h"
 #include <iostream>
 #include <cwchar>
 
@@ -105,6 +106,10 @@ int wmain(int argc, wchar_t* argv[]) {
     DWORD result = ERROR_GEN_FAILURE;
     try {
         auto context = runner::load_session_context(context_path);
+        // A Host adapter may implement both contracts. The current local
+        // handshake-only adapter has no candidate wire contract; report that
+        // explicitly rather than manufacturing payload fields.
+        auto candidate_contract = std::dynamic_pointer_cast<const runner::CandidateEventContract>(context.schema);
         auto telemetry = runner::start_telemetry(std::move(context), stop_event);
         std::cout << "Telemetry READY\n" << std::flush;
         if (!supplied_output) {
@@ -115,7 +120,13 @@ int wmain(int argc, wchar_t* argv[]) {
         std::cout << "Runner started\nOutput: \"" << utf8(output_path) << "\" (recursive)" << std::endl;
         // Creation order deliberately makes exception unwinding stop the
         // candidate producer before destroying/joining the Telemetry client.
-        artifact::CandidateDetector candidates(output_path, report_candidate, report);
+        runner::CandidateTelemetry candidate_telemetry(*telemetry, std::move(candidate_contract),
+            [](const char* diagnostic) { std::cerr << diagnostic << '\n'; });
+        artifact::CandidateDetector candidates(output_path,
+            [&candidate_telemetry](const artifact::CandidateStatus& status) {
+                candidate_telemetry.submit(status);
+                report_candidate(status);
+            }, report);
         try {
             result = artifact::watch_output(output_path, stop_event,
                 [&candidates](const artifact::OutputChange& change) { candidates.submit(change); });

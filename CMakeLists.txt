@@ -7,7 +7,7 @@ endif()
 
 # Single product executable. Connect future Control sources to this target.
 set(ARTIFACT_CANDIDATE_SOURCES src/artifact/candidate_detector.cpp src/artifact/file_stability.cpp)
-add_executable(sandbox_runner src/main.cpp src/artifact/output_watcher.cpp ${ARTIFACT_CANDIDATE_SOURCES})
+add_executable(sandbox_runner src/main.cpp src/candidate_telemetry.cpp src/artifact/output_watcher.cpp ${ARTIFACT_CANDIDATE_SOURCES})
 
 # Reusable protocol/transport objects, linked into the single product executable.
 # JsonCpp is a host build dependency; link its static target to avoid a new DLL.

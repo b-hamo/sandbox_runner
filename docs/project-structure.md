@@ -6,6 +6,9 @@
 Issue #5에서 Artifact와 독립적인 Telemetry 전송 계층을 구현했다. Host의 확정 payload
 스키마·인증 헤더는 외부 계약으로 주입한다. Issue #7에서 외부 Session Context 검증과
 Telemetry 시작·READY 확인·종료를 제품 진입점에 연결했다. Control HELLO_ACK는 아직 미구현이다.
+Issue #9에서 Candidate 콜백과 TelemetryClient 사이에 `CandidateTelemetry` 변환 계층을 연결했다.
+Host의 후보·무효화 wire 계약은 미확정이므로 `CandidateEventContract`로 외부 주입한다.
+현재 로컬 handshake-only Context에는 이 계약이 없어 미전송 진단을 출력한다.
 제품 실행 파일은 `sandbox_runner.exe` 하나이며, Control과 Artifact를 같은 실행 파일에 통합한다.
 후속 구조에 적힌 디렉터리·클래스는 구현 위치에 대한 제안이며 현재 존재하는 코드가 아니다.
 
@@ -39,6 +42,7 @@ sandbox_runner/
 │  ├─ runner_paths.h
 │  ├─ session_context.h / session_context.cpp
 │  ├─ runner_lifecycle.h / runner_lifecycle.cpp
+│  ├─ candidate_telemetry.h / candidate_telemetry.cpp
 │  ├─ protocol/scrp/
 │  │  ├─ envelope.h / envelope.cpp
 │  │  └─ telemetry_messages.h / telemetry_messages.cpp
@@ -69,6 +73,7 @@ sandbox_runner/
 | `src/runner_paths.h` | 기본 Output 경로 `C:\RunnerWorkspace\Output` 정의 |
 | `src/session_context.*` | 기존 `telemetry::Context`를 `runner::SessionContext`로 재사용, 사전 검증·명시적 로컬 JSON 입력 |
 | `src/runner_lifecycle.*` | 주입 Context로 Client 생성·시작, 취소 가능한 READY 대기, 실패 시 RAII 정리 |
+| `src/candidate_telemetry.*` | Candidate 콜백의 중복·무효화 추적, 외부 계약으로 SecurityEvent 변환, 기존 Client enqueue·거부 진단 |
 | `src/artifact/output_watcher.*` | Windows 변경 알림의 재귀 감시, 경로 경계, 감시 오류·취소 처리 |
 | `src/artifact/candidate_detector.*` | 이벤트 큐·worker, 파일별 debounce·관찰 일정, 변경 세대·후보 상태·무효화 관리 |
 | `src/artifact/file_stability.*` | 허용된 일반 파일 접근, 경로 체인 검증, 쓰기 공유 제한, 파일 정보 관찰·비교 |
@@ -80,7 +85,8 @@ sandbox_runner/
 | `CMakeLists.txt` | 단일 Runner, `runner_telemetry` OBJECT와 `runner_lifecycle` STATIC 연결, 제품 빌드만 구성 |
 
 기존 `output_watcher`를 새 감시기로 교체하지 않는다. 후보 상태는 현재
-`CandidateDetector` 내부에서 관리하며 별도의 Candidate Registry·Publisher는 아직 없다.
+`CandidateDetector` 내부에서 관리한다. `CandidateTelemetry`는 보고한 관찰의 ID·세대만 추적하며
+파일 등록·승인용 Candidate Registry는 아니다.
 
 ## 3. 현재 처리 흐름과 인터페이스
 
@@ -101,7 +107,11 @@ main.cpp
          ↓ 안정화 조건 충족
      CandidateStatus 콜백(state = candidate)
          ↓
-     main.cpp의 ARTIFACT_CANDIDATE 콘솔 출력
+     main.cpp 콜백 → CandidateTelemetry::submit() + 기존 콘솔 출력
+         ↓ candidate 상태만 신규 후보 이벤트로 변환
+     CandidateEventContract::candidate_payload() (외부 Host 계약)
+         ↓ SecurityEvent(event_id, observed_at, category=ARTIFACT_CANDIDATE)
+     TelemetryClient::enqueue() → 기존 Pending → SECURITY_EVENT Envelope → WSS / EVENT_ACK
 ```
 
 `output_watcher`는 변경 알림을 수집한다. 파일을 후보로 판단하는 책임은
@@ -112,7 +122,10 @@ main.cpp
 삭제·이름 변경·재수정은 기존 후보를 무효화하거나 새 세대의 관찰을 시작한다.
 후속 소비자는 후보 이벤트뿐 아니라 이후 변경과 무효화도 반영해야 한다.
 
-현재 `ARTIFACT_CANDIDATE`는 내부 상태 콜백과 로그이며 SCRP JSON이나 Host 전송이 아니다.
+`ARTIFACT_CANDIDATE`는 외부 계약이 주입되면 기존 SECURITY_EVENT 경로로 전송한다.
+현재 로컬 `InjectedHandshake`는 후보 계약·EVENT_ACK를 제공하지 않으므로 콘솔과 미전송 진단만 남긴다.
+Host adapter는 기존 `TelemetrySchema`와 `runner::CandidateEventContract`를 함께 구현한다.
+`main.cpp`는 Context의 schema에서 해당 계약을 얻으며, 없는 경우 payload를 추측하지 않는다.
 안정화는 관찰 기반 판단이므로 최종 쓰기 완료·안전성·파일의 불변성을 보장하지 않는다.
 상세 조건과 제한은 [Artifact 후보 감지 문서](artifact-candidates.md)를 따른다.
 
@@ -120,7 +133,9 @@ main.cpp
 Telemetry를 stop한다. 생산자를 먼저 중지하여 종료 중 새 작업이 유입되지 않게 한다.
 Telemetry는 신규 enqueue를 거부하고 WSS I/O·콜백을 정리한 후 worker를 join한다.
 미확인 Pending은 stop 후 진단 가능하고 Client 소멸 시 해제한다. ACK 성공으로 간주하거나 무한 drain하지 않는다.
-예외 시에도 생성의 역순으로 후보 worker, Telemetry, 종료 이벤트를 정리한다.
+변환 계층은 Telemetry 이후, CandidateDetector 이전에 생성한다. 콜백은 변환 계층을 참조하며
+후보 worker join 후에는 더 이상 호출되지 않는다. 예외 시에도 생성의 역순으로 후보 worker,
+변환 계층, Telemetry, 종료 이벤트를 정리한다. 변환 계층 자체는 worker나 네트워크를 소유하지 않는다.
 감시 오류·누락이 드러나면 후보 상태도 무효화한다. Sandbox의 시작·강제 종료는 Host Runtime의 책임이다.
 
 ### Runner Session Context와 Telemetry 흐름 — 현재 구현
@@ -151,8 +166,28 @@ Telemetry는 신규 enqueue를 거부하고 WSS I/O·콜백을 정리한 후 wor
 `snapshot()`은 상태, Pending 개수·바이트, 거부·만료·오류 누계와 진단을 제공한다.
 만료·초과는 Coverage 저하로 노출하며 임의로 SECURITY_EVENT 스키마를 만들어 보내지 않는다.
 Host의 Action 차단 정책이나 Coverage wire 연결은 후속 책임이다.
-제품 실행 시 위 lifecycle에서 Telemetry를 시작한다. Artifact 콜백은 기존 콘솔 출력만 수행하며
-Candidate → SECURITY_EVENT 연결은 구현하지 않았다.
+제품 실행 시 위 lifecycle에서 Telemetry를 시작한다. Artifact 콜백은 변환 계층과 기존 콘솔 출력으로
+전달한다. 외부 계약 미주입·변환 실패·enqueue 거부는 고정 진단으로 노출하고 성공으로 처리하지 않는다.
+
+### Candidate 보고 계약과 상태
+
+`CandidateObservation`은 Output 기준 UTF-8 상대 경로, 로컬 `file_generation`, `event_id`,
+`observed_at`을 외부 계약에 전달하는 내부 타입이다. UUID와 UTC 시각은 기존 SCRP 유틸리티를
+사용하며, payload의 event_id·observed_at 일치와 ARTIFACT_CANDIDATE category를 확인한 뒤 enqueue한다.
+경로·candidate_id·파일 세대의 wire 필드명과 배치는 Host 계약 책임이다. 세션 정보는 기존 Envelope가 붙인다.
+
+- 동일 경로(기존 감지기와 같은 Windows 대소문자 비교)·세대는 enqueue 성공 후 ACK가 끝나도 다시 보고하지 않는다.
+- pending·stabilizing은 신규 후보 이벤트를 생성하지 않는다. 쓰기 핸들 경합은 안정화 재시도 상태로 유지한다.
+- 재수정·삭제·rename은 기존 관찰을 로컬 무효화하고, 새 세대가 안정화되면 새 event_id로 보고한다.
+- 이미 보고된 후보의 무효화는 `invalidation_payload(previous, cause, event_id, observed_at)`에 위임한다.
+  null을 반환하면 wire 미합의를 진단하고 로컬 무효화만 수행한다. 임의의 무효화 category를 만들지 않는다.
+- 전역 unavailable(감시 오류·중지·worker 실패)은 모든 관찰을 무효화하고 추가 입력을 거부한다.
+- 경로별 상태 한도는 기본 4096이며 CandidateDetector 기본 한도와 같다. 사용자 지정 시 두 한도를 맞춘다.
+  이전 세대의 관찰 payload나 파일 바이트는 보관하지 않는다.
+- READY 이전·재연결·ACK·재전송은 기존 Pending 처리에 맡긴다. 거부 이벤트의 자동 재시도 큐는 추가하지 않는다.
+  같은 콜백이 재전달되면 거부된 관찰의 ID·시각을 유지해 다시 시도할 수 있다.
+- Pending에 이미 들어간 이벤트는 과거 관찰 기록이다. 로컬 무효화가 이를 취소하거나 업로드를 승인하지 않는다.
+  무효화 enqueue 실패·종료 시 미확인 Pending은 전달 보장이 없으며 후속 Host 정책이 필요하다.
 
 ## 4. 후속 확장 구조 제안 — 미구현
 
@@ -186,11 +221,11 @@ src/
 
 ### Artifact
 
-현재 감지 기능에 후보 식별과 후속 요청 연결을 추가할 위치다.
-필요하면 Candidate Registry와 Publisher로 나눌 수 있으나 지금 별도 구현은 없다.
+현재 감지 기능은 전송 계층에 의존하지 않는다. Runner 조립 계층의 `CandidateTelemetry`가
+후보 보고를 연결하며 승인된 파일 요청 연결은 후속 작업이다.
 Runner의 로컬 후보 기록과 Host Artifact Broker의 후보 등록·승인 기록은 서로 다른 책임이다.
 
-Publisher를 추가한다면 내부 상태를 Protocol의 이벤트 타입으로 변환하는 역할을 맡긴다.
+`CandidateTelemetry`는 외부 계약을 통해 내부 상태를 기존 Protocol의 이벤트 타입으로 변환한다.
 감시 코드 안에서 WebSocket 연결·인증·재전송을 직접 처리하지 않는다.
 후보의 식별자 발급·유효기간·무효화 표현은 Host와의 계약에 맞춰 연결한다.
 
@@ -227,7 +262,11 @@ Artifact 외의 보안 이벤트도 같은 전송 계층을 사용한다.
 Host는 이벤트를 저장한 후 `EVENT_ACK`를 보낸다. 재연결 시 미확인 이벤트를 새 Envelope로
 재전송하며 같은 `event_id`는 유지해 Host가 중복 저장을 방지한다.
 연결별 `sequence_number`와 원래 이벤트의 관찰 시각은 구분한다.
-이벤트 저장 확인은 파일 업로드 승인이나 안전 판정이 아니다.
+EVENT_ACK는 보안 이벤트 저장 확인이며, Artifact Broker의 Candidate 등록 완료를 의미하지 않는다.
+현재 Client는 검증된 ACK로 Pending을 제거할 뿐 Candidate 등록 상태를 변경하지 않는다.
+변환 계층의 `accepted`도 로컬 enqueue 수용 여부이며 Host ACK나 후보 등록 완료 상태가 아니다.
+Broker 등록 결과 확인과 등록 실패 재처리 계약은 후속 작업이다.
+이벤트 저장 확인은 파일 업로드 승인이나 안전 판정도 아니다.
 
 ACK 대기·재연결·미확인 이벤트 버퍼는 전송 계층에서 관리한다.
 명세의 버퍼 기본값은 10 MiB 또는 5분 중 먼저 도달하는 한도이며,
@@ -264,15 +303,15 @@ Control·Telemetry JSON에 파일 바이트나 대용량 Base64를 넣지 않는
 파일은 Host가 승인한 endpoint와 파일·세션·상한·만료에 한정된 권한으로 HTTPS PUT 전송한다.
 Guest가 지정한 임의 URL이나 임의 경로를 그대로 사용하는 범용 업로드 API를 만들지 않는다.
 
-## 7. 후보 보고와 파일 반출 — 후속 흐름
+## 7. 후보 보고와 파일 반출 — 현재 연결과 후속 흐름
 
 ```text
 Runner 내부 후보 이벤트                         [현재 구현]
-    ↓ 후보 식별·SCRP 변환                        [이하 미구현]
+    ↓ CandidateTelemetry + 외부 CandidateEventContract [변환 연결 구현, Host 계약 미확정]
 SECURITY_EVENT(category = ARTIFACT_CANDIDATE)
     ↓ Telemetry WSS
 Host 이벤트 저장 → EVENT_ACK
-    ↓ 별도의 후보 승인·전송 요청
+    ↓ 별도의 후보 승인·전송 요청                 [이하 미구현]
 Host Artifact Broker: artifact_id·upload_id·업로드 권한 발급
     ↓ Control WSS의 ARTIFACT_REQUEST
 Runner: 현재 후보·파일 상태·허용 경로 재검증
@@ -298,7 +337,7 @@ Runner 내부 Output을 Host의 쓰기 가능한 공유 폴더로 매핑하지 �
 | `CandidateStatus::generation` | 현재 구현된 로컬 파일 변경 세대. 후보 변경·무효화 추적용 |
 | SCRP Envelope `generation` | Host가 관리하는 Runtime 재생성 세대. 위 값으로 대체하면 안 됨 |
 | `candidate_id` | 후보를 전송 요청과 연결할 식별자. 현재 내부 상태에는 없음 |
-| `event_id` | 현재 `SecurityEvent`의 ID. Pending 중복·ACK 추적에 사용. Artifact 상태와는 미연결 |
+| `event_id` | 현재 `SecurityEvent`의 ID. 후보 관찰마다 생성해 Pending·ACK·변환 계층의 중복 추적에 사용 |
 | `artifact_id` / `upload_id` | Host Artifact Broker가 발급할 파일 등록·업로드 식별자 |
 | `message_id` / `sequence_number` | Envelope 및 연결·송신 방향별 전송 식별. 파일 세대와 별개 |
 
@@ -334,7 +373,7 @@ README는 프로젝트 개요·빌드 진입점, 이 문서는 구조와 책임 
 
 1. 구현된 공용 Session Context에 실제 Host SCRP 스키마를 제공한다. 파일 세대·Runtime 세대 및 후보 해시 정책을 구분한다.
 2. Control handshake를 구현하고 HELLO_ACK의 Telemetry 자격·확정 스키마를 현재 Client에 연결한다.
-3. 내부 후보 상태를 SECURITY_EVENT로 연결하고 ACK·재전송·무효화 계약을 검증한다.
+3. 구현된 CandidateTelemetry에 실제 Host 후보 식별·무효화 계약을 주입하고 상호 호환성을 검증한다.
 4. 승인된 ARTIFACT_REQUEST 처리와 제한된 HTTPS 업로드를 구현한다.
 5. Host Quarantine의 검사·승인·반출과 연결해 전체 흐름을 검증한다.
 
