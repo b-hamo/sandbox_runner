@@ -11,8 +11,8 @@ Sandbox 하나를 세션 하나로 사용한다. 인자 없이 실행하면 `C:\
 - `src/artifact/output_watcher.{h,cpp}`: Windows `ReadDirectoryChangesW` 기반 감시.
 - `src/artifact/candidate_detector.{h,cpp}`: 기존 이벤트 큐를 재사용한 파일별 debounce·안정화·세대·후보 상태 관리.
 - `src/artifact/file_stability.{h,cpp}`: 기존 경로 검증과 파일 메타데이터 비교를 분리한 안정화 관찰.
-- `tests/output_watcher_tests.cpp`: 실제 Windows 파일 이벤트 및 EXE 종료 테스트.
-- `CMakeLists.txt`: 단일 Runner와 선택적 테스트 실행 파일을 빌드한다.
+- `src/protocol/scrp/`, `src/transport/telemetry/`: Artifact와 독립적인 SCRP Telemetry WSS·ACK·재전송 계층. [API·검증](docs/telemetry.md).
+- `CMakeLists.txt`: 제품 Runner만 빌드한다.
 
 ### 팀원이 코드를 연결할 위치
 
@@ -21,18 +21,18 @@ Sandbox 하나를 세션 하나로 사용한다. 인자 없이 실행하면 `C:\
 | Runner 진입점 | `src/main.cpp` | Control과 Artifact를 연결할 공통 진입점 |
 | 세션 경로 | `src/runner_paths.h` | Sandbox 내부 고정 Output 경로의 기준 |
 | Artifact 구현 | `src/artifact/` | Runner에 포함되는 감시 코드 |
-| 개발용 검증 코드 | `tests/` | Host에서 구현을 검증하는 코드. Runner에 포함하거나 Sandbox에 배포하지 않음 |
+| 로컬 검증 코드 | `tests/` | Git 제외. 저장소 빌드·제품 배포에 포함하지 않음 |
 | 빌드 산출물 | `build/` | EXE와 CMake 캐시. Git 제외 |
 
-제품 실행 파일은 `sandbox_runner.exe` 하나다. `tests/output_watcher_tests.cpp`의 별도 진입점은
-검증용 `output_watcher_tests.exe`에서만 사용한다. 다른 모듈은 `tests/`를 참조하거나 연결하지 않는다.
-테스트 소스는 검증 절차를 공유하기 위해 Git에 포함하며, 테스트 중 생성되는 임시 파일과 구분한다.
+제품 실행 파일은 `sandbox_runner.exe` 하나다. 테스트 소스·스크립트와 테스트용 CMake는
+로컬 `tests/`에만 보관하고 Git에서 제외한다. 새 checkout은 테스트 파일 없이 제품을 빌드한다.
 
 향후 Control과 Artifact의 구현 소스를 같은 실행 타깃에 연결한다.
 [이슈 #1](https://github.com/b-hamo/sandbox_runner/issues/1)의 감시 기능에
 [이슈 #3](https://github.com/b-hamo/sandbox_runner/issues/3)의 최신 설계 변경에 따라 파일 안정화와 Artifact 후보 보고를 연결한다.
 Runner는 Defender 검사와 SHA-256/MIME/크기 검증을 수행하지 않는다. 이 검증은 Host Quarantine의 책임이다.
-GUI 제어, SCRP 전송, 업로드 및 Host의 최종 반출 승인은 포함하지 않는다.
+GUI 제어, Artifact의 SCRP 연동, 업로드 및 Host의 최종 반출 승인은 포함하지 않는다.
+재사용 가능한 Telemetry 전송 계층은 포함하지만 현재 `main.cpp`는 이를 자동 시작하지 않는다.
 안정화 판단·후보 이벤트·제한·검증 결과는 [후보 감지 문서](docs/artifact-candidates.md)를 따른다.
 C++ 표준 버전은 팀 합의 전까지 CMake에서 고정하지 않으며 사용 중인 컴파일러 기본값을 따른다.
 
@@ -80,6 +80,8 @@ Runner는 이 감시 콜백에서 `CandidateDetector::submit()`만 호출한다.
 
 MSYS2 **UCRT64** 터미널에서 저장소 루트로 이동한다.
 UCRT64용 GCC, CMake, Ninja가 설치되어 있어야 한다.
+Telemetry의 JSON 처리를 위해 UCRT64 JsonCpp도 필요하다 (`pacman -S mingw-w64-ucrt-x86_64-jsoncpp`).
+JsonCpp는 정적으로 연결하므로 Sandbox에 별도 JsonCpp DLL을 설치하지 않는다.
 `command -v cmake ninja g++` 결과가 모두 `/ucrt64/bin/` 아래인지 확인한다.
 다른 컴파일러로 만든 `build/` 캐시가 있다면 해당 폴더를 먼저 별도 위치에 백업한다.
 
@@ -130,30 +132,11 @@ Set-Content -LiteralPath (Join-Path (Split-Path $outputPath) 'outside.txt') -Val
 현재 MinGW 빌드에서는 GCC/C++/스레드 런타임을 정적으로 연결해 Host의 DLL 검색 경로에 의존하지 않도록 한다.
 Windows 기본 DLL 외의 런타임 DLL이 필요하면 사용한 UCRT64 도구 체인의 DLL을 EXE와 함께 배치한다.
 
-## 자동 검증
+## 검증 정책
 
-테스트 빌드 옵션 `RUNNER_BUILD_TESTS`는 기본값이 `OFF`다.
-아래 명령으로 명시적으로 켰을 때만 개발용 테스트 실행 파일을 함께 빌드한다.
-CMake는 옵션을 캐시에 저장하므로, 같은 `build/`에서 제품 빌드만 하려면
-`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRUNNER_BUILD_TESTS=OFF`로 다시 설정한다.
-이 설정은 이미 생성된 테스트 EXE를 삭제하지 않는다. Sandbox 배포 대상은 `sandbox_runner.exe`와 필요한 런타임 DLL이다.
-
-UCRT64 터미널에서:
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRUNNER_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure -V
-```
-
-실제 생성·수정·이름 변경·삭제, 한글 경로, 기존/새 하위 폴더 재귀 감시와 폴더 이름 변경,
-범위 밖 파일 및 기존/새 junction 대상 제외, 폴더 준비·기존 파일 보존, 잘못된 경로,
-반복 시작·중지와 핸들 수, 숨겨진 콘솔의 실제 Runner Ctrl+C 종료를 검증한다.
-정확한 이벤트 횟수가 아닌 제한 시간 내 기대 이벤트 존재를 검사한다.
-심볼릭 링크를 만들 권한이 없으면 해당 테스트는 `SKIP`을 출력한다.
-`artifact_candidate` 테스트는 변경 묶음 처리, 안정화 중 재변경·삭제·이름 변경,
-쓰기 잠금 재시도·시간 초과, 경로 경계, junction·ADS·hardlink 제외, 감시 누락·큐 초과와 종료를 확인한다.
-실제 Runner가 안정화된 파일의 `ARTIFACT_CANDIDATE`를 출력하는 것도 검증한다. Defender 설치·실행은 필요 없다.
+자동 테스트 코드는 로컬에만 보관한다. 공유 CMake에는 테스트 타깃·옵션이 없으며,
+기존 `RUNNER_BUILD_TESTS`, `RUNNER_TEST_LOCAL_TLS` 옵션은 제품 빌드에서 사용하지 않는다.
+이전에 수행한 검증 결과는 아래에 이력으로 남긴다. 새 checkout에서 수동 확인은 위 실행 절차를 따른다.
 
 Junction 거부는 PowerShell에서 별도로 재현할 수 있다:
 
