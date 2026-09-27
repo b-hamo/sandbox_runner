@@ -106,14 +106,23 @@ struct TelemetryClient::Impl {
                         ready=true; set_state(ConnectionState::ready);
                     } else {
                         if(ack.type!="EVENT_ACK" || ack.connection_id!=connection || inflight_event.empty() ||
-                           ack.correlation_id!=inflight_message || context.schema->event_ack(ack)!=inflight_event)
+                           ack.correlation_id!=inflight_message)
                             throw std::runtime_error("Invalid EVENT_ACK");
+                        try {
+                            if(context.schema->event_ack(ack)!=inflight_event)
+                                throw std::runtime_error("Invalid EVENT_ACK");
+                        } catch(const scrp::EventStorageRejected& rejected) {
+                            if(rejected.event_id()!=inflight_event) throw std::runtime_error("Invalid EVENT_ACK");
+                            throw;
+                        }
                         std::lock_guard<std::mutex> lock(mutex);
                         if(!pending.acknowledge(inflight_event)) throw std::runtime_error("Unknown pending event");
                         inflight_event.clear(); inflight_message.clear(); retries=0;
                     }
                     ++rx;
                 }
+            } catch(const scrp::EventStorageRejected&) {
+                if(!stopping) error("Host rejected security-event storage; unacknowledged events retained");
             } catch(const SocketError& e) {
                 if(!stopping) error(e.what());
             } catch(...) {

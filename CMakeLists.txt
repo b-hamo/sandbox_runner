@@ -15,12 +15,13 @@ find_package(jsoncpp CONFIG REQUIRED)
 add_library(runner_telemetry OBJECT
     src/protocol/scrp/envelope.cpp
     src/protocol/scrp/telemetry_messages.cpp
+    src/protocol/scrp/artifact_candidate.cpp
     src/transport/telemetry/pending_event_store.cpp
     src/transport/telemetry/telemetry_client.cpp
     src/transport/telemetry/winhttp_websocket.cpp)
 target_include_directories(runner_telemetry PUBLIC src)
 target_link_libraries(runner_telemetry PUBLIC jsoncpp_static winhttp bcrypt crypt32)
-add_library(runner_lifecycle STATIC src/session_context.cpp src/runner_lifecycle.cpp)
+add_library(runner_lifecycle STATIC src/session_context.cpp src/runner_lifecycle.cpp src/artifact_candidate_adapter.cpp)
 target_link_libraries(runner_lifecycle PUBLIC runner_telemetry)
 target_link_libraries(sandbox_runner PRIVATE runner_lifecycle)
 

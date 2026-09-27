@@ -82,6 +82,8 @@ void validate_session(const SessionContext& s) {
     require(!s.session_id.empty() && !s.runtime_id.empty() && s.generation>0 &&
             valid_utf8(s.session_id) && valid_utf8(s.runtime_id), "Invalid Host session context");
 }
+bool valid_uuid_v4(const std::string& value) { return uuid(value); }
+void validate_utc_timestamp(const std::string& value) { utc_ticks(value); }
 bool valid_utf8(const std::string& s) {
     return s.empty() || (s.size()<=static_cast<std::size_t>(INT_MAX) &&
         MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), static_cast<int>(s.size()), nullptr, 0)>0);

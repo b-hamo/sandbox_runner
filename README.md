@@ -10,6 +10,7 @@ Telemetry READY 이후 `C:\RunnerWorkspace\Output`을 준비한다. 하위 폴�
 - `src/main.cpp`: 공통 실행 진입점, Context·`--output` 입력, 로그 및 Ctrl+C/Ctrl+Break 종료.
 - `src/session_context.*`, `src/runner_lifecycle.*`: 기존 Context 재사용·외부 입력 검증·Telemetry READY 확인·종료 연결.
 - `src/candidate_telemetry.*`: 외부 CandidateEventContract로 후보·무효화를 변환해 기존 TelemetryClient에 전달.
+- `src/artifact_candidate_adapter.*`, `src/protocol/scrp/artifact_candidate.*`: 명시적으로 선택한 후보 payload·저장 ACK 계약안과 제품 adapter.
 - `src/runner_paths.h`: 세션의 고정 Output 경로. C++ 구성 요소는 이 상수를 공유한다.
 - `src/artifact/output_watcher.{h,cpp}`: Windows `ReadDirectoryChangesW` 기반 감시.
 - `src/artifact/candidate_detector.{h,cpp}`: 기존 이벤트 큐를 재사용한 파일별 debounce·안정화·세대·후보 상태 관리.
@@ -35,8 +36,9 @@ Telemetry READY 이후 `C:\RunnerWorkspace\Output`을 준비한다. 하위 폴�
 [이슈 #3](https://github.com/b-hamo/sandbox_runner/issues/3)의 최신 설계 변경에 따라 파일 안정화와 Artifact 후보 보고를 연결한다.
 Runner는 Defender 검사와 SHA-256/MIME/크기 검증을 수행하지 않는다. 이 검증은 Host Quarantine의 책임이다.
 GUI 제어, 업로드 및 Host의 최종 반출 승인은 포함하지 않는다.
-Artifact의 SCRP 연결 계층은 구현했으며 후보·무효화 payload는 외부 Host 계약 주입이 필요하다.
-현재 로컬 handshake-only Context로는 후보를 전송하지 않고 계약 미주입 진단을 출력한다.
+Context에 `"event_contract": "artifact-candidate-v1"`을 지정하면 제품 adapter가 후보 이벤트를
+전송하고 저장 ACK를 처리한다. [계약·예제·Host 합의 대기 상태](docs/artifact-candidate-contract.md)를 확인한다.
+생략 시 기존 handshake-only 동작을 유지하며 후보는 전송하지 않는다. 무효화 wire 전송은 범위 밖이다.
 Telemetry는 외부 Context로 시작하며 Control HELLO_ACK 입력은 아직 미구현이다.
 입력 파일과 테스트/Host 계약의 경계는 [Session Context 입력 절차](docs/telemetry.md)를 따른다.
 안정화 판단·후보 이벤트·제한·검증 결과는 [후보 감지 문서](docs/artifact-candidates.md)를 따른다.

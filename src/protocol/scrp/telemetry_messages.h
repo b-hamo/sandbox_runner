@@ -1,11 +1,24 @@
 #pragma once
 #include "envelope.h"
+#include <stdexcept>
+#include <utility>
 
 namespace scrp {
 struct SecurityEvent {
     std::string event_id;
     std::string observed_at;
     Json::Value payload{Json::objectValue};
+};
+
+// A schema-validated storage refusal, never successful event delivery. The
+// client must also correlate this event ID with the current in-flight event.
+class EventStorageRejected : public std::runtime_error {
+public:
+    explicit EventStorageRejected(std::string event_id)
+        : std::runtime_error("Host rejected security-event storage"), event_id_(std::move(event_id)) {}
+    const std::string& event_id() const { return event_id_; }
+private:
+    std::string event_id_;
 };
 
 // W1 describes payload intent, not a frozen closed schema. The Host integration
