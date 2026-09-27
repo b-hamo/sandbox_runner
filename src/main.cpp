@@ -1,6 +1,7 @@
 #include "artifact/output_watcher.h"
 #include "artifact/candidate_detector.h"
 #include "runner_paths.h"
+#include "runner_lifecycle.h"
 #include <iostream>
 #include <cwchar>
 
@@ -63,26 +64,31 @@ void report_candidate(const artifact::CandidateStatus& status) {
 
 int wmain(int argc, wchar_t* argv[]) {
     if (argc == 2 && std::wcscmp(argv[1], L"--help") == 0) {
-        std::wcout << L"Usage: sandbox_runner.exe [--output C:\\test-session\\Output]\n"
+        std::wcout << L"Usage: sandbox_runner.exe --session-context <local-context.json> [--output C:\\test-session\\Output]\n"
                    << L"Default: " << runner::default_output_path
                    << L" (created if missing, watched recursively until stopped)\n"
-                   << L"--output: use an existing directory for development/testing\n";
+                   << L"--output: use an existing directory for development/testing\n"
+                   << L"--session-context: explicit local injection; see docs/telemetry.md\n";
         return 0;
     }
-    if (argc != 1 && (argc != 3 || std::wcscmp(argv[1], L"--output") != 0)) {
-        std::cerr << "Usage: sandbox_runner.exe [--output C:\\test-session\\Output]\n";
-        return 2;
-    }
-    std::cout << "Runner started\n";
-    const std::wstring output_path = argc == 1 ? runner::default_output_path : argv[2];
-    if (argc == 1) {
-        const DWORD error = artifact::prepare_output_directory(output_path);
-        if (error != ERROR_SUCCESS) {
-            std::cerr << "Cannot prepare session Output (Win32 error " << error << ").\n";
-            return 1;
+    std::wstring context_path;
+    std::wstring output_path = runner::default_output_path;
+    bool supplied_output = false;
+    for (int i = 1; i < argc; i += 2) {
+        if (i + 1 < argc && std::wcscmp(argv[i], L"--session-context") == 0 && context_path.empty()) {
+            context_path = argv[i + 1];
+        } else if (i + 1 < argc && std::wcscmp(argv[i], L"--output") == 0 && !supplied_output) {
+            output_path = argv[i + 1];
+            supplied_output = true;
+        } else {
+            std::cerr << "Invalid Runner arguments; use --help.\n";
+            return 2;
         }
     }
-    std::cout << "Output: \"" << utf8(output_path) << "\" (recursive)" << std::endl;
+    if (context_path.empty()) {
+        std::cerr << "Runner initialization failed: --session-context is required.\n";
+        return 2;
+    }
     stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!stop_event) {
         std::cerr << "Cannot create stop event: " << GetLastError() << '\n';
@@ -98,6 +104,17 @@ int wmain(int argc, wchar_t* argv[]) {
     }
     DWORD result = ERROR_GEN_FAILURE;
     try {
+        auto context = runner::load_session_context(context_path);
+        auto telemetry = runner::start_telemetry(std::move(context), stop_event);
+        std::cout << "Telemetry READY\n" << std::flush;
+        if (!supplied_output) {
+            const DWORD error = artifact::prepare_output_directory(output_path);
+            if (error != ERROR_SUCCESS)
+                throw std::runtime_error("Cannot prepare session Output (Win32 error " + std::to_string(error) + ")");
+        }
+        std::cout << "Runner started\nOutput: \"" << utf8(output_path) << "\" (recursive)" << std::endl;
+        // Creation order deliberately makes exception unwinding stop the
+        // candidate producer before destroying/joining the Telemetry client.
         artifact::CandidateDetector candidates(output_path, report_candidate, report);
         try {
             result = artifact::watch_output(output_path, stop_event,
@@ -108,8 +125,19 @@ int wmain(int argc, wchar_t* argv[]) {
         }
         if (result != ERROR_SUCCESS) candidates.invalidate(result);
         candidates.stop();
+        // First drain/cancel watcher I/O and stop/join candidate producers. Then
+        // reject new Telemetry work, cancel WSS I/O and join its worker. Pending
+        // events remain inspectable until client destruction; they are not ACKed.
+        telemetry->stop();
+        if (telemetry->snapshot().pending_events)
+            std::cerr << "Telemetry stopped with unacknowledged events.\n";
+        std::cout << "Telemetry stopped\n";
     } catch (const std::exception& error) {
-        std::cerr << "Watch exception: " << error.what() << '\n';
+        result = ERROR_GEN_FAILURE;
+        std::cerr << "Runner initialization/lifecycle failed: " << error.what() << '\n';
+    } catch (...) {
+        result = ERROR_GEN_FAILURE;
+        std::cerr << "Runner initialization/lifecycle failed.\n";
     }
     AcquireSRWLockExclusive(&stop_lock);
     CloseHandle(stop_event);
@@ -117,8 +145,7 @@ int wmain(int argc, wchar_t* argv[]) {
     ReleaseSRWLockExclusive(&stop_lock);
     SetConsoleCtrlHandler(on_console_event, FALSE);
     if (result != ERROR_SUCCESS) {
-        std::cerr << "Output watch failed (Win32 error " << result
-                  << "). Watch stopped; events may be missing.\n";
+        std::cerr << "Runner stopped with failure (Win32 result " << result << ").\n";
         return 1;
     }
     std::cout << "Watch stopped\n";
