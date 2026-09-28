@@ -41,10 +41,15 @@ struct RuntimeSnapshot {
 
 class SandboxRuntime {
 public:
+    enum class StartupAuthority { VerifiedGrant, Host6055 };
     struct Config {
         SessionBinding binding;
         std::filesystem::path guest_workspace_base;
         control::ActionScheduler::Config worker;
+        StartupAuthority startup_authority = StartupAuthority::VerifiedGrant;
+        // Host6055 uses the authenticated Broker as the input/startup authority.
+        // file coverage means a live session Output watcher, not system-wide monitoring.
+        std::function<bool()> output_monitor_healthy;
     };
     using ResultCallback = std::function<void(const RuntimeResult&)>;
     explicit SandboxRuntime(Config config);

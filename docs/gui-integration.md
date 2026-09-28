@@ -1,5 +1,11 @@
 # GUI 실행 모듈 연동 (#14)
 
+> 2026-09-28 후속 상태: Host `feat/19-observation-upload`의 `6055cc6`에 HTTPS 수신기가 추가되어
+> 원본 bootstrap용 제품 연결을 구현했다. `file` 범위는 사용자 합의에 따라 세션 Output 폴더다.
+> 아래 내용은 이전 구현/검증의 이력이다. 현재 계약과 최신 검증 제한은
+> [Host observation 연결](host-observation-integration.md)을 우선한다.
+
+
 ## 구현 상태와 경계
 
 제공된 `sandbox_runtime_cpp/sandbox_runtime/src/control` 및 `src/runtime`의 C++ 실행

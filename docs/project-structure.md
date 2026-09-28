@@ -10,7 +10,11 @@ Issue #13에서 Control HELLO/HELLO_ACK·요청 수신·검증·분배 모듈을
 Host `feat/1-host-sender`의 fed305b 스키마 adapter와 응답 송신을 추가하고,
 main의 `--control-context` 관리 모드에 연결했다. Artifact/Telemetry 모드와는 별도로 선택한다.
 Issue #14에서 제공 GUI 실행 모듈과 `GuiSession` 내부 adapter·비동기 결과 경로를 통합했다.
-실제 GUI 활성화에는 Host 시작 승인/HTTPS upload adapter 주입이 필요하다. [GUI 연동 문서](gui-integration.md)를 따른다.
+기존 내부 주입 경로에 더해 #17에서 원본 Host bootstrap용 실행 경로를 추가했다. [GUI 연동 문서](gui-integration.md)를 따른다.
+Issue #17에서 제품 Control owner와 제한된 HTTPS PNG 업로더를 추가했다.
+Host `feat/19-observation-upload`의 `6055cc6`용 `--host-bootstrap` 모드를 추가했다.
+실제 Output 감시와 GUI·HTTPS 업로드를 연결한다. 시작/입력 허용 판단은 인증된 Host Broker가 담당한다.
+기존 `--control-context`는 관리 모드를 유지한다. [현재 계약과 검증](host-observation-integration.md)을 따른다.
 Issue #9에서 Candidate 콜백과 TelemetryClient 사이에 `CandidateTelemetry` 변환 계층을 연결했다.
 Issue #11에서 `artifact-candidate-v1` payload·ACK 계약안과 제품 `ArtifactCandidateAdapter`를 구현했다.
 로컬 Context의 명시적 `event_contract` 선택으로 실제 후보 전송을 활성화한다. 미선택 시 기존
@@ -51,6 +55,8 @@ sandbox_runner/
 │  ├─ runner_lifecycle.h / runner_lifecycle.cpp
 │  ├─ control_session.h / control_session.cpp
 │  ├─ gui_session.h / gui_session.cpp
+│  ├─ gui_product.h / gui_product.cpp
+│  ├─ host_gui.h / host_gui.cpp
 │  ├─ control/ (control_types, control_util, screen_capture, input_executor, action_scheduler)
 │  ├─ runtime/ (session_workspace, sandbox_runtime)
 │  ├─ candidate_telemetry.h / candidate_telemetry.cpp
@@ -66,6 +72,8 @@ sandbox_runner/
 │  │  └─ winhttp_websocket.h / winhttp_websocket.cpp
 │  ├─ transport/control/
 │  │  └─ control_receiver.h / control_receiver.cpp
+│  ├─ transport/observation/
+│  │  └─ https_uploader.h / https_uploader.cpp
 │  └─ artifact/
 │     ├─ output_watcher.h
 │     ├─ output_watcher.cpp
@@ -80,6 +88,8 @@ sandbox_runner/
    ├─ control-receiver.md
    ├─ host-sender-integration.md
    ├─ gui-integration.md
+   ├─ gui-product-contract-proposal.md
+   ├─ gui-product-validation.md
    └─ telemetry.md
 ```
 
@@ -95,6 +105,9 @@ sandbox_runner/
 | `src/runner_lifecycle.*` | 주입 Context로 Client 생성·시작, 취소 가능한 READY 대기, 실패 시 RAII 정리 |
 | `src/control_session.*` | Control 수신 worker·stop/join, 기본 관리 모드 및 선택적 GuiSession 연결 |
 | `src/gui_session.*` | 검증 요청 변환, Host grant·lease, ACK/결과 큐, scoped uploader 주입, 비동기 종료 |
+| `src/host_gui.*` | 원본 Host bootstrap 검증, 세션 Output 감시 시작·건강 상태, Host6055 GUI·업로더 연결과 종료 |
+| `src/gui_product.*` | 제품 Control owner, 서비스 사전 검증·probe 준비·GUI/uploader 수명 관리, 미설정 시 관리 모드 |
+| `src/transport/observation/https_uploader.*` | 고정 HTTPS origin/경로, 요청에 묶인 일회성 권한, PNG 상한·만료·취소·완료 상태 검증 |
 | `src/control/*` | Windows 캡처·입력, 직렬 Scheduler·ledger·좌표 관찰 유효성 |
 | `src/runtime/*` | Guest workspace 및 실행 권한·lease·차단, Host VM Manager와 구분 |
 | `src/protocol/scrp/host_sender_schema.*` | Host fed305b 초안 호환 HELLO/ACK·요청·제품 응답 검증, negotiated 메시지 한도 |
@@ -118,13 +131,21 @@ sandbox_runner/
 
 ## 3. 현재 처리 흐름과 인터페이스
 
-`--control-context` 선택 시에는 `main → load_control_context → run_control_session → Receiver`로
+`--control-context` 선택 시에는 `main → load_control_context → run_product_control_session → run_control_session → Receiver`로
 연결한다. 수신 worker는 HELLO_ACK 이후 요청을 검증하고 관리 응답을 송신한다.
 TERMINATE_RESULT 송신 또는 콘솔 취소 후 socket close·worker join·종료 이벤트 정리 순서로 끝난다.
+`--host-bootstrap`은 Output 감시 준비 → WSS HELLO → HELLO_ACK → GUI Worker 시작 → Host의 STATE/OBSERVE/HEARTBEAT 시작 검증 순서다.
+Host가 READY 이후 입력을 발행하며, 요청받은 OBSERVE에만 PNG를 전송한다. 종료/단절 또는 감시 오류는 입력을 차단하고 Worker·전송·감시 스레드를 정리한다.
+GUI 모드의 Output 감시는 현재 알림 수와 건강 상태를 관리하며 Candidate/Telemetry 반출 흐름은 별도다.
+
 CLI 기본 관리 모드의 GUI Worker와 Coverage는 비활성이며 Runtime READY를 주장하지 않는다.
 신뢰된 호출자가 GuiSession을 주입하면 WSS 수신 → 직렬 GUI Worker → bounded 결과 큐 → WSS 응답으로 연결한다.
 캡처는 전용 uploader의 성공 확인 후 메타데이터를 응답하고, 연결 단절은 Runtime을 즉시 block한다.
 시작/종료 흐름과 Host 계약 차이는 [GUI 연동 문서](gui-integration.md)에 상세히 기록한다.
+제품 owner에 `GuiProductServices`가 주입되면 실제 캡처와 준비 callback을 거쳐 위 GUI 경로를 시작한다.
+현재 CLI는 services를 주입하지 않는다. 합의된 Host adapter/factory와 최신 Host의 준비 단계
+관찰·입력 허용 전이는 미구현이며, 내부 연결점 존재를 제품 활성화로 간주하지 않는다.
+uploader는 GuiSession보다 먼저 생성되고 나중에 파괴되어 전송 작업 종료까지 수명을 유지한다.
 아래 기존 Artifact/Telemetry 흐름은 `--session-context` 모드에서만 실행된다.
 
 ```text
