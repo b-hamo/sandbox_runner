@@ -24,7 +24,8 @@ Host 기준은 #13과 동일한 `b-hamo/host_control` commit `fed305b06dfcfdced4
 1. Host가 session/runtime/generation 및 Guest 내부의 신뢰된 고정 workspace base를 준비한다.
    base는 기존 로컬 디렉터리여야 하며 Host의 쓰기 가능한 공유 경로를 사용하지 않는다.
 2. `GuiSession(config, authorize, upload)`을 만든다. 기본 WorkerBackend는 Windows GDI/WIC/SendInput이다.
-   테스트에서만 C++의 fake backend를 주입했다. wire/JSON으로 backend를 선택할 수 없다.
+  단위 테스트에서만 C++의 fake backend를 주입했다. 실제 Sandbox 검증은 기본 backend를 사용한다.
+  wire/JSON으로 backend를 선택할 수 없다.
 3. `gui.startup_probe()`의 PNG를 별도 시작 검증 경로로 Host가 검증한다. probe는 좌표 입력용
    observation_id를 만들지 않는다. 로컬 캡처 성공만으로 Host 검증 플래그를 설정하지 않는다.
 4. Control Context의 session을 동일하게 연결하여 `run_control_session(context, stop_event, &gui)`을 호출한다.
@@ -125,5 +126,9 @@ ctest --test-dir build/tests --output-on-failure
 OBSERVE→클릭→한글 입력→스크롤→hotkey→STATE_REQUEST→TERMINATE를 실행하고,
 입력 중 WSS 단절/lease 만료 시 후속 입력이 중지되는지 확인해야 한다.
 
-**미검증/남은 결정:** Host 승인 및 HTTPS 업로드 계약·구현, Host WSS/auth 운영 구현,
-실제 Sandbox GUI·PNG/전송·DPI/UIPI·시작 비용, Control+Artifact+Telemetry 동시 lifecycle.
+추가로 원본 Host `feat/3-auth-tls`의 WSS Sender와 실제 Sandbox에서 관찰·클릭·한글 입력·
+관리 요청을 검증했다. 테스트 adapter를 주입한 실제 모듈은 성공했고 기본 제품 CLI는
+GUI 미지원으로 종료했다. 범위와 수집 오류는 [실제 Sandbox 검증 기록](sandbox-host-sender-validation.md)을 따른다.
+
+**미검증/남은 결정:** 제품 Host 승인 및 HTTPS 업로드 계약·구현, Host WSS/auth 운영 연결,
+다양한 DPI/UIPI·시작 비용, Control+Artifact+Telemetry 동시 lifecycle.
