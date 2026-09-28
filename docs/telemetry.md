@@ -5,7 +5,7 @@ Issue #5의 일반 `SECURITY_EVENT` 전송 기반을 Issue #7에서 Runner 시�
 Issue #9의 `CandidateTelemetry`가 외부 후보 계약을 통해 기존 enqueue에 연결한다.
 Issue #11의 `ArtifactCandidateAdapter`는 명시적으로 선택한 artifact-candidate-v1 계약안으로
 제품 실행의 후보 전송·저장 ACK를 활성화한다. [계약·예제·합의 상태](artifact-candidate-contract.md)를 따른다.
-업로드·Control HELLO_ACK는 미구현이며 기존 Artifact 모듈 책임은 유지한다.
+업로드·Control HELLO_ACK에서 Telemetry Context로의 변환은 미구현이며 기존 Artifact 모듈 책임은 유지한다.
 
 ## Runner Session Context 입력과 lifecycle
 
@@ -122,7 +122,7 @@ status, error, payload다. W1 문서 버전 v0.1과 wire version은 서로 다�
 - 수신 message_id·nonce 재사용을 거부한다. 캐시는 연결당 최대 65,536 메시지로 제한하며
   한도 도달 시 연결을 새로 만든다. 기본 타임스탬프 허용 오차는 60초다.
 - UTF-8, 중복 JSON key, 알려지지 않은 Envelope 필드, 잘못된 타입, non-finite 숫자,
-  과도한 깊이(16), 추가 JSON 데이터를 거부한다. UTC RFC3339는 초 또는 밀리초 정규 형식을 지원한다.
+  과도한 깊이(16), 추가 JSON 데이터를 거부한다. UTC RFC3339는 초 또는 소수점 1~6자리와 Z 접미사를 지원한다.
 
 재전송은 같은 event_id·observed_at·payload에 새로운 message_id·nonce·전송 시각·연결별 sequence를
 부여한다. 파일 변경 세대와 Runtime generation은 혼용하지 않는다. Host는 event_id로 중복 저장을

@@ -7,6 +7,11 @@ Telemetry READY 이후 `C:\RunnerWorkspace\Output`을 준비한다. 하위 폴�
 
 ## 현재 범위
 
+Control 수신·관리 응답은 `sandbox_runner.exe --control-context <파일>`로 별도 실행한다.
+Host Sender 연동 결과와 설정은 [Host 연동 문서](docs/host-sender-integration.md)를 따른다.
+이 모드는 HELLO, 생존·상태·종료 요청을 처리하며 GUI 실행·업로드는 미지원 오류를 반환한다.
+기존 Artifact/Telemetry 모드와 동시에 선택하지 않는다.
+
 - `src/main.cpp`: 공통 실행 진입점, Context·`--output` 입력, 로그 및 Ctrl+C/Ctrl+Break 종료.
 - `src/session_context.*`, `src/runner_lifecycle.*`: 기존 Context 재사용·외부 입력 검증·Telemetry READY 확인·종료 연결.
 - `src/candidate_telemetry.*`: 외부 CandidateEventContract로 후보·무효화를 변환해 기존 TelemetryClient에 전달.
@@ -39,7 +44,7 @@ GUI 제어, 업로드 및 Host의 최종 반출 승인은 포함하지 않는다
 Context에 `"event_contract": "artifact-candidate-v1"`을 지정하면 제품 adapter가 후보 이벤트를
 전송하고 저장 ACK를 처리한다. [계약·예제·Host 합의 대기 상태](docs/artifact-candidate-contract.md)를 확인한다.
 생략 시 기존 handshake-only 동작을 유지하며 후보는 전송하지 않는다. 무효화 wire 전송은 범위 밖이다.
-Telemetry는 외부 Context로 시작하며 Control HELLO_ACK 입력은 아직 미구현이다.
+Telemetry는 외부 Context로 시작하며 Control HELLO_ACK에서 Telemetry Context로의 변환은 아직 미구현이다.
 입력 파일과 테스트/Host 계약의 경계는 [Session Context 입력 절차](docs/telemetry.md)를 따른다.
 안정화 판단·후보 이벤트·제한·검증 결과는 [후보 감지 문서](docs/artifact-candidates.md)를 따른다.
 C++ 표준 버전은 팀 합의 전까지 CMake에서 고정하지 않으며 사용 중인 컴파일러 기본값을 따른다.

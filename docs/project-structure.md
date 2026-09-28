@@ -5,7 +5,10 @@
 이 문서는 현재 Runner의 코드 구조와 SCRP 통신을 연결할 후속 구조를 구분해 설명한다.
 Issue #5에서 Artifact와 독립적인 Telemetry 전송 계층을 구현했다. Host의 확정 payload
 스키마·인증 헤더는 외부 계약으로 주입한다. Issue #7에서 외부 Session Context 검증과
-Telemetry 시작·READY 확인·종료를 제품 진입점에 연결했다. Control HELLO_ACK는 아직 미구현이다.
+Telemetry 시작·READY 확인·종료를 제품 진입점에 연결했다.
+Issue #13에서 Control HELLO/HELLO_ACK·요청 수신·검증·분배 모듈을 추가했다.
+Host `feat/1-host-sender`의 fed305b 스키마 adapter와 응답 송신을 추가하고,
+main의 `--control-context` 관리 모드에 연결했다. Artifact/Telemetry 모드와는 별도로 선택한다.
 Issue #9에서 Candidate 콜백과 TelemetryClient 사이에 `CandidateTelemetry` 변환 계층을 연결했다.
 Issue #11에서 `artifact-candidate-v1` payload·ACK 계약안과 제품 `ArtifactCandidateAdapter`를 구현했다.
 로컬 Context의 명시적 `event_contract` 선택으로 실제 후보 전송을 활성화한다. 미선택 시 기존
@@ -43,16 +46,20 @@ sandbox_runner/
 │  ├─ runner_paths.h
 │  ├─ session_context.h / session_context.cpp
 │  ├─ runner_lifecycle.h / runner_lifecycle.cpp
+│  ├─ control_session.h / control_session.cpp
 │  ├─ candidate_telemetry.h / candidate_telemetry.cpp
 │  ├─ artifact_candidate_adapter.h / artifact_candidate_adapter.cpp
 │  ├─ protocol/scrp/
 │  │  ├─ envelope.h / envelope.cpp
 │  │  ├─ telemetry_messages.h / telemetry_messages.cpp
+│  │  ├─ host_sender_schema.h / host_sender_schema.cpp
 │  │  └─ artifact_candidate.h / artifact_candidate.cpp
 │  ├─ transport/telemetry/
 │  │  ├─ telemetry_client.h / telemetry_client.cpp
 │  │  ├─ pending_event_store.h / pending_event_store.cpp
 │  │  └─ winhttp_websocket.h / winhttp_websocket.cpp
+│  ├─ transport/control/
+│  │  └─ control_receiver.h / control_receiver.cpp
 │  └─ artifact/
 │     ├─ output_watcher.h
 │     ├─ output_watcher.cpp
@@ -64,6 +71,8 @@ sandbox_runner/
    ├─ project-structure.md
    ├─ artifact-candidates.md
    ├─ artifact-candidate-contract.md
+   ├─ control-receiver.md
+   ├─ host-sender-integration.md
    └─ telemetry.md
 ```
 
@@ -73,10 +82,12 @@ sandbox_runner/
 
 | 파일 | 현재 책임 |
 | --- | --- |
-| `src/main.cpp` | 외부 Context 입력, Telemetry READY 이후 Output 준비·감시·후보 감지, 콘솔 종료 조정 |
+| `src/main.cpp` | 명시적 Artifact/Telemetry 또는 Control 모드 선택, 외부 Context 입력, 콘솔 종료 조정 |
 | `src/runner_paths.h` | 기본 Output 경로 `C:\RunnerWorkspace\Output` 정의 |
-| `src/session_context.*` | 기존 `telemetry::Context`를 `runner::SessionContext`로 재사용, 사전 검증·명시적 로컬 JSON 입력 |
+| `src/session_context.*` | Telemetry Context 및 별도 Control Context의 명시적 로컬 JSON 입력·자격/TLS 검증 |
 | `src/runner_lifecycle.*` | 주입 Context로 Client 생성·시작, 취소 가능한 READY 대기, 실패 시 RAII 정리 |
+| `src/control_session.*` | Control worker·stop/join, 관리 요청 응답, 미구현 GUI/업로드 거부, TERMINATE 이후 종료 |
+| `src/protocol/scrp/host_sender_schema.*` | Host fed305b 초안 호환 HELLO/ACK·요청·제품 응답 검증, negotiated 메시지 한도 |
 | `src/candidate_telemetry.*` | Candidate 콜백의 중복·무효화 추적, 외부 계약으로 SecurityEvent 변환, 기존 Client enqueue·거부 진단 |
 | `src/artifact_candidate_adapter.*` | 기존 handshake schema를 유지하면서 CandidateEventContract·TelemetrySchema의 후보 payload·ACK 연결 |
 | `src/artifact/output_watcher.*` | Windows 변경 알림의 재귀 감시, 경로 경계, 감시 오류·취소 처리 |
@@ -88,13 +99,20 @@ sandbox_runner/
 | `src/transport/telemetry/telemetry_client.*` | 전용 worker, 채널 바인딩, ACK 검증, 상태·재연결·재전송·종료 |
 | `src/transport/telemetry/pending_event_store.*` | 미확인 이벤트 보관, 중복·충돌·용량 제한, 명시적 만료 |
 | `src/transport/telemetry/winhttp_websocket.*` | WinHTTP 비동기 WSS, 인증 헤더 주입, TLS 검증, 프레임 재조립·취소 |
-| `CMakeLists.txt` | 단일 Runner, `runner_telemetry` OBJECT와 `runner_lifecycle` STATIC 연결, 제품 빌드만 구성 |
+| `src/transport/control/control_receiver.*` | Control handshake·요청 검증·핸들러 분배·응답 상관관계/송신 sequence, 취소·실패·소켓 정리 |
+| `CMakeLists.txt` | 단일 Runner, `runner_telemetry` OBJECT와 `runner_lifecycle`/`runner_control` STATIC, 제품 빌드만 구성 |
 
 기존 `output_watcher`를 새 감시기로 교체하지 않는다. 후보 상태는 현재
 `CandidateDetector` 내부에서 관리한다. `CandidateTelemetry`는 보고한 관찰의 ID·세대만 추적하며
 파일 등록·승인용 Candidate Registry는 아니다.
 
 ## 3. 현재 처리 흐름과 인터페이스
+
+`--control-context` 선택 시에는 `main → load_control_context → run_control_session → Receiver`로
+연결한다. 수신 worker는 HELLO_ACK 이후 요청을 검증하고 관리 응답을 송신한다.
+TERMINATE_RESULT 송신 또는 콘솔 취소 후 socket close·worker join·종료 이벤트 정리 순서로 끝난다.
+이 모드의 GUI Worker와 Coverage는 비활성이며 Runtime READY를 주장하지 않는다.
+아래 기존 Artifact/Telemetry 흐름은 `--session-context` 모드에서만 실행된다.
 
 ```text
 main.cpp
@@ -158,7 +176,7 @@ Telemetry는 신규 enqueue를 거부하고 WSS I/O·콜백을 정리한 후 wor
 
 현재 실행 파일은 `--session-context <파일>`을 필수로 받는다. 로컬 입력 형식·trust·handshake
 계약은 [Telemetry 문서](telemetry.md)의 Session Context 입력 절차를 따른다.
-이는 Control/Host wire 규약이 아니며 Control HELLO_ACK, credential 발급·갱신은 구현하지 않는다.
+이는 Control/Host wire 규약이 아니며 Control HELLO_ACK의 자격 추출, credential 발급·갱신은 구현하지 않는다.
 향후 Control은 `runner::SessionContext`와 실제 `TelemetrySchema`를 직접 주입하면 된다.
 
 ```text
@@ -220,7 +238,7 @@ src/
 ├─ protocol/
 │  └─ scrp/                       [현재] Envelope·Telemetry 타입 / [후속] Host 확정 스키마
 └─ transport/
-   ├─ control/                    [후속] 제어 WSS 연결·송수신
+   ├─ control/                    [현재] handshake·수신·응답 / [후속] 비동기 Worker 연결
    ├─ telemetry/                  [현재] 이벤트 WSS 연결·ACK·재전송
    └─ [후속] 승인된 HTTPS 업로드
 ```
@@ -258,7 +276,12 @@ Git에서 제외된 로컬 검증 코드에만 존재하며 제품 기본 스키
 
 ### Control Transport: `src/transport/control/`
 
-제어 채널 연결·인증·송수신을 담당하고 메시지를 해당 기능으로 전달한다.
+`control::Receiver`가 제어 WSS 연결·HELLO handshake·요청 수신·검증·분배를 담당한다.
+외부 Schema가 닫힌 payload를 검증하고 등록된 핸들러만 호출한다. 응답 batch를 검증하고 송신하며 자동 재연결은 없다.
+호출자가 수신 스레드와 stop/join을 소유하며, Receiver는 종료·실패 시 소켓을 정리한다.
+main의 명시적 Control 모드에서 기동한다. 사용법·검증·한도는 [수신부 문서](control-receiver.md)를 따른다.
+
+후속 제어 채널 전체 기능에서는 비동기 Worker 연결과 Action 상태 기록도 담당한다.
 명세상 `HELLO / HELLO_ACK`, `OBSERVE / OBSERVE_RESULT`, `ACTION_REQUEST / ACK / ACTION_RESULT`,
 `STATE_REQUEST / STATE_RESULT`, `HEARTBEAT / ALIVE`, `ARTIFACT_REQUEST / ARTIFACT_RESULT`,
 `TERMINATE / TERMINATE_RESULT`가 이 채널을 사용한다.
@@ -303,7 +326,8 @@ Sandbox에서 `localhost`는 Guest 자신이므로 Host 주소로 사용하지 �
 
 `17443`은 설정 가능한 기본 포트다. 같은 포트를 사용해도 연결·인증 Scope·큐·제한은 분리한다.
 최종 Host 연동에서는 Control의 bootstrap 인증과 HELLO_ACK로 별도 채널 자격을 전달할 예정이다.
-현재는 해당 Control 경로 대신 외부 Context를 명시적으로 주입해 Telemetry를 연결한다.
+현재 Telemetry 모드는 외부 Context를 명시적으로 주입한다. 별도 Control 모드는 HELLO_ACK의
+채널 자격 형식을 검증하지만 Telemetry를 시작하거나 재연결 자격으로 사용하지 않는다.
 TLS 인증서 검증을 끄거나 평문으로 자동 전환하지 않는다. 토큰은 로그나 URL에 넣지 않는다.
 현재 WSS는 Windows 인증서 저장소의 체인·호스트명 검증과 최소 TLS 1.2를 사용한다.
 `TlsTrust::leaf_sha256`는 선택적 추가 pin이며 기본 인증서 검증을 대체하지 않는다.
@@ -383,7 +407,7 @@ README는 프로젝트 개요·빌드 진입점, 이 문서는 구조와 책임 
 ## 10. 다음 작업
 
 1. 구현된 artifact-candidate-v1 계약안의 Host 공유·합의를 완료하고 실제 Host 호환성을 검증한다.
-2. Control handshake를 구현하고 HELLO_ACK의 Telemetry 자격·확정 스키마를 현재 Client에 연결한다.
+2. Host 스키마 초안의 합의를 완료하고 HELLO_ACK의 Telemetry 자격을 현재 Client에 전달해 동시 기동을 연결한다.
 3. 후속 후보 등록·무효화 정책을 합의한다. EVENT_ACK를 Broker 등록 완료로 해석하지 않는다.
 4. 승인된 ARTIFACT_REQUEST 처리와 제한된 HTTPS 업로드를 구현한다.
 5. Host Quarantine의 검사·승인·반출과 연결해 전체 흐름을 검증한다.
