@@ -16,12 +16,17 @@ struct UploadGrant {
     std::size_t max_bytes = 0;
     std::uint64_t max_pixels = 0;
 };
+enum class AuthorizationMode { HeaderCredential, Host6055UploadId };
 struct Destination {
     // Trusted deployment origin, e.g. https://host.example:17443 (no path).
     // The existing OBSERVE schema defines /scrp/v1/observations/<upload_id>.
     std::wstring origin;
     unsigned completed_status = 0; // Explicit agreed completion: 200, 201 or 204, never 202.
     std::chrono::milliseconds timeout{5000}; // Total operation budget, not per chunk.
+    // Explicit opt-in to host_control 6055cc6: 256-bit upload_id is the secret
+    // capability delivered by authenticated OBSERVE; no Authorization header.
+    AuthorizationMode authorization = AuthorizationMode::HeaderCredential;
+    telemetry::TlsTrust trust;
 };
 class HttpsUploader {
 public:

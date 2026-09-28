@@ -177,7 +177,7 @@ Host 폴더를 매핑하여 전달한다면 읽기 전용으로 제한하며, Ho
 
 Sandbox 자동 시작은 Runtime 담당의 `.wsb` `LogonCommand`/Bootstrap에서 Context를 전달하도록 연결한다.
 이 저장소는 Sandbox를 생성·종료하는 Runtime 구현을 추가하지 않는다.
-Runner는 감시 대기 중에도 계속 실행되며, 아직 Control 실행 루프와는 연결되지 않았다.
+Artifact/Telemetry 모드는 별도로 실행한다. `--host-bootstrap` 모드는 세션 Output 감시와 Control GUI 루프를 함께 실행한다.
 관리되는 종료는 Runner 중지 요청 → 감시 I/O 정리 완료 → Sandbox 종료 순서로 연결해야 한다.
 Sandbox 강제 종료 시의 정상 정리 완료는 보장하지 않는다.
 
@@ -204,8 +204,16 @@ OS 감시 버퍼 강제 초과 및 디스크 오류 재현은 아직 검증하�
 Host 시작 승인 및 scoped HTTPS uploader의 내부 주입이 필요하다.
 구현/검증/남은 Host 계약과 호출 절차는 [GUI 연동 문서](docs/gui-integration.md)를 따른다.
 
-Issue #17은 제품 lifecycle owner와 실제 HTTPS PNG 업로더의 기반을 추가했다.
-현재 Host는 시작 승인 전달·업로드 권한 발급·PNG 수신 계약을 제공하지 않아
-**일반 EXE의 GUI 활성화는 여전히 미완료**다. CLI 도움말과 실행 로그에 관리 모드를 표시한다.
-[계약 제안 및 연결 경계](docs/gui-product-contract-proposal.md),
-[실행한 검증과 미검증 항목](docs/gui-product-validation.md)을 참고한다.
+Issue #17에서 Host `feat/19-observation-upload`의 `6055cc6` bootstrap을 받는 실행 경로를 추가했다.
+Sandbox 안에서 인증서를 신뢰하도록 launcher가 준비한 뒤 다음과 같이 실행한다.
+
+```powershell
+.\sandbox_runner.exe --host-bootstrap C:\RunnerPackage\bootstrap.json --host-address 192.168.0.3
+```
+
+주소는 실제 Host IPv4로 바꾼다. bootstrap에 주소가 지정되어 있으면 일치해야 한다.
+인증서의 SAN도 해당 주소와 일치해야 하며 Windows 인증서 검증을 해제하지 않는다.
+세션 Output 감시를 시작한 뒤 Control에 연결하고, Host 요청에 따라 캡처·PNG 업로드·GUI 명령을 처리한다.
+현재 실제 Sandbox 재검증은 Windows Sandbox 로그인 오류로 막혀 있으며 전체 성공을 확인하지 못했다.
+[현재 통신 계약·실행 경계](docs/host-observation-integration.md),
+[검증 이력](docs/gui-product-validation.md)을 참고한다.

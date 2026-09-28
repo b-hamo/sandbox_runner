@@ -92,6 +92,10 @@ Json::Value HostSenderSchema::hello(const SessionContext& s) const {
     p["runner_version"] = "control-receiver-0.1";
     p["capabilities"] = capabilities();
     for (const auto field : {"process","file","network","script","registry"}) p["monitoring_coverage"][field] = false;
+    if (output_monitor_) {
+        check(output_monitor_());
+        p["monitoring_coverage"]["file"] = true;
+    }
     p["client_nonce"] = random_nonce(); return p;
 }
 std::string HostSenderSchema::hello_ack(const Envelope& e) const {

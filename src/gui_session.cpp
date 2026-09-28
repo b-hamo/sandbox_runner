@@ -44,8 +44,8 @@ std::chrono::milliseconds lease(const std::string& stamp) {
 }
 }
 GuiSession::GuiSession(runtime::SandboxRuntime::Config config, Authorize authorize, Upload upload)
-    : runtime_(std::move(config)), authorize_(std::move(authorize)), upload_(std::move(upload)),
-      schema_(std::make_shared<scrp::HostSenderSchema>(true)) {
+    : runtime_(config), authorize_(std::move(authorize)), upload_(std::move(upload)),
+      schema_(std::make_shared<scrp::HostSenderSchema>(true, config.output_monitor_healthy)) {
     if (!authorize_ || !upload_) throw std::invalid_argument("GUI requires Host authorization and scoped upload adapters");
 }
 GuiSession::~GuiSession() { stop(); }
@@ -66,7 +66,7 @@ void GuiSession::connected(const scrp::Envelope& e) {
     grant.gui_observe = grant.gui_observe && has("gui.observe");
     grant.gui_input = grant.gui_input && has("gui.input");
     policy_ = grant.policy_version;
-    runtime_.activate(grant); // preserves startup/monitoring/network/probe checks
+    runtime_.activate(grant); // applies the explicitly selected startup authority
     uploader_ = std::thread(&GuiSession::upload_loop,this);
 }
 control::ActionRequest GuiSession::translate(const scrp::Envelope& e) {

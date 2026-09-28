@@ -34,6 +34,8 @@ bool SandboxRuntime::matches(const RequestContext& context) const {
         context.connection_id == grant_.context.connection_id;
 }
 ErrorCode SandboxRuntime::gate() const {
+    if (config_.startup_authority == StartupAuthority::Host6055 &&
+        (!config_.output_monitor_healthy || !config_.output_monitor_healthy())) blocked_.store(true);
     if (blocked_.load()) return ErrorCode::Cancelled;
     if (tick_ms() >= lease_until_.load()) {
         blocked_.store(true); // renewal after expiration cannot silently resume work
@@ -57,9 +59,13 @@ CaptureResult SandboxRuntime::startup_probe() {
 void SandboxRuntime::activate(const HostGrant& grant) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (activated_ || blocked_.load() || stopped_) throw std::logic_error("runtime cannot be reactivated");
+    const bool startup_ok = config_.startup_authority == StartupAuthority::VerifiedGrant
+        ? probe_ok_ && grant.startup_verified && grant.network_policy_verified && grant.required_monitoring_verified
+        : config_.startup_authority == StartupAuthority::Host6055 && !config_.worker.backend &&
+          config_.output_monitor_healthy && config_.output_monitor_healthy();
     if (!same(grant.context.binding, config_.binding) || grant.context.connection_id.empty() ||
         grant.context.connection_id.size() > 128 || grant.policy_version.empty() || grant.policy_version.size() > 128 ||
-        !probe_ok_ || !grant.startup_verified || !grant.network_policy_verified || !grant.required_monitoring_verified ||
+        !startup_ok ||
         !valid_lease(grant.lease)) throw std::invalid_argument("unverified Host grant or invalid binding/lease");
     grant_ = grant;
     lease_until_.store(tick_ms() + grant.lease.count());
