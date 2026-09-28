@@ -41,8 +41,8 @@ bool reply_type(const std::string& request, const std::string& reply) {
 Receiver::Receiver(Context context, Handlers handlers, Options options, SocketFactory factory)
     : Receiver(std::move(context), wrap(std::move(handlers)), options, std::move(factory)) {}
 
-Receiver::Receiver(Context context, ReplyHandlers handlers, Options options, SocketFactory factory)
-    : context_(std::move(context)), handlers_(std::move(handlers)), options_(options), factory_(std::move(factory)) {
+Receiver::Receiver(Context context, ReplyHandlers handlers, Options options, SocketFactory factory, Hooks hooks)
+    : context_(std::move(context)), handlers_(std::move(handlers)), options_(options), factory_(std::move(factory)), hooks_(std::move(hooks)) {
     scrp::validate_session(context_.session);
     telemetry::validate_connection_settings(context_.connection);
     if (!context_.schema || !context_.credential || !factory_ || handlers_.empty() ||
@@ -70,6 +70,7 @@ void Receiver::run(const std::atomic<bool>& stop) {
         if (started_) throw std::logic_error("Control receiver is single use");
         started_ = true;
     }
+    struct Disconnect { Hooks& hooks; ~Disconnect() { if (hooks.disconnected) { try { hooks.disconnected(); } catch (...) {} } } } disconnect{hooks_};
     const char* diagnostic = "Control connection failed";
     try {
         if (stop) { state(State::stopped); return; }
@@ -95,9 +96,35 @@ void Receiver::run(const std::atomic<bool>& stop) {
         std::uint64_t sequence = 1, outbound = 1;
         std::size_t message_limit = context_.connection.max_message_bytes;
         std::set<std::string> message_ids, nonces, actions;
+        std::map<std::string, scrp::Envelope> pending;
+        auto send_reply = [&](const scrp::Envelope& request, const Reply& reply) {
+            require(reply_type(request.type, reply.type) && outbound < options_.max_messages);
+            auto e = scrp::make_envelope(context_.session, connection, ++outbound, reply.type, reply.payload);
+            e.correlation_id = request.message_id;
+            e.task_id = request.task_id; e.action_id = request.action_id;
+            e.status = reply.status; e.error = reply.error;
+            context_.schema->validate_reply(e);
+            const auto wire = scrp::serialize(e);
+            require(wire.size() <= message_limit);
+            socket->send(wire, stop);
+        };
         while (!stop) {
             require(std::chrono::system_clock::now() < credential.expires_at);
             if (connection.empty()) require(std::chrono::steady_clock::now() < deadline);
+            if (!connection.empty() && hooks_.poll) {
+                const auto ready = hooks_.poll();
+                require(ready.size() <= 34);
+                bool finished = false;
+                for (const auto& result : ready) {
+                    auto found = pending.find(result.correlation_id);
+                    require(found != pending.end() && result.reply.type != "ACK");
+                    require(!result.finish || found->second.type == "TERMINATE");
+                    send_reply(found->second, result.reply);
+                    pending.erase(found);
+                    finished = finished || result.finish;
+                }
+                if (finished) break;
+            }
             std::string incoming;
             if (!socket->receive(incoming, std::chrono::milliseconds(20), stop)) continue;
             if (stop) break;
@@ -115,6 +142,7 @@ void Receiver::run(const std::atomic<bool>& stop) {
                         request.connection_id.asString() == connection);
                 message_limit = std::min(message_limit, context_.schema->message_limit());
                 require(message_limit > 0);
+                if (hooks_.connected) hooks_.connected(request);
                 state(State::receiving);
                 diagnostic = "Control request rejected or connection lost";
             } else {
@@ -133,7 +161,18 @@ void Receiver::run(const std::atomic<bool>& stop) {
                 }
                 if (stop) break;
                 diagnostic = "Control request handler failed";
+                // Reserve before handoff: no input can execute after queue exhaustion.
+                if (request.type == "ACTION_REQUEST" || request.type == "OBSERVE")
+                    require(pending.size() < 33); // reserve TERMINATE, never block management traffic
                 auto replies = handler->second(request);
+                if (replies.deferred) {
+                    require(bool(hooks_.poll) && !replies.finish);
+                    require(request.type == "ACTION_REQUEST" || request.type == "OBSERVE" || request.type == "TERMINATE");
+                    if (request.type == "ACTION_REQUEST")
+                        require(replies.messages.size() == 1 && replies.messages[0].type == "ACK" && replies.messages[0].status == "ACCEPTED");
+                    else require(replies.messages.empty());
+                    pending.emplace(request.message_id, request);
+                }
                 require(replies.messages.size() <= 2);
                 std::vector<std::string> wire;
                 for (const auto& reply : replies.messages) {

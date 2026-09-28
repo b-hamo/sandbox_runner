@@ -7,7 +7,8 @@
 #include <windows.h>
 
 namespace runner {
-// Management-only Control mode: no GUI Worker, Artifact producer or Telemetry.
-DWORD run_control_session(control::Context context, HANDLE stop_event);
-control::ReplyHandlers management_handlers();
+class GuiSession;
+// GUI requires trusted Host adapters; nullptr preserves management-only mode.
+DWORD run_control_session(::control::Context context, HANDLE stop_event, GuiSession* gui = nullptr);
+::control::ReplyHandlers management_handlers();
 }

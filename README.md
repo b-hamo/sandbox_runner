@@ -194,3 +194,12 @@ OS 감시 버퍼 강제 초과 및 디스크 오류 재현은 아직 검증하�
 - Runtime Bootstrap 및 파일 생성 구성 요소에서 확정된 고정 경로를 사용하는 연결.
 - Control과 Artifact의 시작·종료를 단일 진입점에서 연결하는 방식.
 - 알림 누락 시 재동기화 정책.
+
+## GUI 실행 모듈 연동 (#14)
+
+제공된 Windows 캡처/클릭/스크롤/키보드 모듈을 단일 Runner에 연결했다.
+`GuiSession`은 Host 승인·capability·lease를 확인하고 ACK 선송신, 비동기 결과,
+상태 조회 및 종료/연결 단절 차단을 처리한다.
+기본 `--control-context` CLI는 여전히 관리 모드이며, 실제 GUI 활성화에는 신뢰된
+Host 시작 승인 및 scoped HTTPS uploader의 내부 주입이 필요하다.
+구현/검증/남은 Host 계약과 호출 절차는 [GUI 연동 문서](docs/gui-integration.md)를 따른다.

@@ -50,14 +50,14 @@ Host ACK, 실행 완료, 파일 안전성 판정이 아니다.
 - `Handlers`: 허용된 요청 타입별 콜백. 기본 핸들러·임의 RPC·GUI 실행 함수는 없다.
 - `ReplyHandlers`: 응답 목록과 `finish`를 반환하는 동기 콜백. finish는 송신 후 종료한다.
   Receiver가 connection, 새 message_id/nonce, correlation_id, task/action ID, 송신 sequence를 관리한다.
-  등록되지 않은 응답 계약은 기본적으로 송신을 거부한다. 비동기 Worker 결과 큐는 후속 범위다.
+  등록되지 않은 응답 계약은 기본적으로 송신을 거부한다. Issue #14의 Hooks::poll이 검증된 지연 응답을 전달한다.
 - `run(const atomic<bool>& stop)`: 호출 스레드에서 실행하는 단일 사용 blocking 수신 루프.
   소유자가 worker를 만든 경우 stop을 설정하고 join한 뒤 Receiver 및 콜백 참조 대상을 해제한다.
 - `snapshot()`: 다른 스레드에서 상태·분배 횟수·진단 조회 가능.
 
 스키마와 핸들러는 빠르게 반환해야 한다. 핸들러는 용량이 제한된 작업 큐로 인계하며
 GUI 동작·업로드·긴 I/O를 수신 스레드에서 실행하지 않는다. 큐가 가득 찬 경우 예외로 인계 실패를 알린다.
-현재 Receiver는 작업 큐를 소유하지 않으며, 이미 인계된 작업의 취소도 수행하지 않는다.
+Receiver는 작업 큐를 소유하지 않는다. GUI 연결 시 disconnected hook이 Runtime을 block하고 owner가 join한다.
 후속 소유 계층은 run 종료/실패 시 미시작 작업을 차단하고 큐를 정리해야 한다.
 이미 진행 중인 콜백을 강제 중단할 수 없으므로 종료 시간은 콜백의 신속한 반환에 의존한다.
 
@@ -86,8 +86,8 @@ DEGRADED/worker_alive=false로 미구현 상태를 드러낸다. 조회한 Actio
 
 1. Host 초안 중 확정 대기 항목의 팀 합의, 실제 Worker 구현에 따른 Capability·허용 범위.
 2. ACK의 Telemetry 자격을 기존 Session Context로 전달하고 Control/Artifact 동시 lifecycle 연결.
-3. 비동기 Worker의 ACK/RESULT 응답 큐와 Host 권한의 READY·lease·주기 Heartbeat 정책.
-4. GUI 작업 큐·Action 상태 기록, 연결 종료 시 미시작 작업 차단, 재연결·재개 정책.
+3. #14에서 비동기 ACK/RESULT, Runtime lease/상태/차단 연결 구현. 실제 Host READY/업로드 계약 주입은 후속.
+4. #14에서 GUI 큐·Action 기록·연결 종료 차단 구현. 자동 재연결·재개는 제공하지 않음.
 5. ARTIFACT_REQUEST의 현재 후보·경로 재검증 및 제한된 HTTPS 업로드.
 
 W1 PDF의 candidate_id·Guest 해시 등 과거 Artifact 표현은 Issue #11 계약을 덮어쓰지 않는다.
@@ -123,3 +123,7 @@ WSS 테스트는 Python cryptography가 필요하며 loopback 테스트 인증�
 후속 Host 연동 검증에서는 기존 테스트 7개에 Host 스키마와 응답 경계 테스트를 추가했다.
 실제 Host Sender의 테스트 결과와 제한은 [Host 연동 문서](host-sender-integration.md)에 기록한다.
 이번 Control 모듈의 Windows Sandbox 실행은 미검증이다.
+
+## GUI 지연 응답 연결 (#14)
+
+기본 CLI 관리 모드는 유지한다. 신뢰된 Host adapter가 GuiSession을 주입하면 Replies::deferred로 원 요청을 보존하고 Hooks::poll에서 최종 응답을 보낸다. ACK를 먼저 보내고 이후 결과를 송신하며, 최대 33개 작업과 종료 1개를 추적한다. Hooks::connected는 검증된 HELLO_ACK 후 호출되고 disconnected는 모든 종료 경로에서 실행을 차단한다. 구체 계약과 미구현 운영 연결은 [GUI 연동 문서](gui-integration.md)를 따른다.

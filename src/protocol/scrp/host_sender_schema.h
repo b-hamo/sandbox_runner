@@ -7,15 +7,24 @@ namespace scrp {
 // One instance per connection. Artifact event contracts remain independent.
 class HostSenderSchema : public control::Schema {
 public:
+    explicit HostSenderSchema(bool gui = false) : gui_(gui) {}
+    const Json::Value& allowed_capabilities() const { return allowed_; }
+    std::size_t queue_limit() const { return queue_limit_; }
     Json::Value hello(const SessionContext&) const override;
     std::string hello_ack(const Envelope&) const override;
     void validate_request(const Envelope&) const override;
     void validate_reply(const Envelope&) const override;
     std::size_t message_limit() const override { return limit_.load(); }
 protected:
-    // Product has no GUI worker. A future implementation advertises only real capabilities.
-    virtual Json::Value capabilities() const { return Json::Value(Json::arrayValue); }
+    virtual Json::Value capabilities() const {
+        Json::Value result(Json::arrayValue);
+        if (gui_) { result.append("gui.observe"); result.append("gui.input"); }
+        return result;
+    }
 private:
+    bool gui_;
+    mutable Json::Value allowed_{Json::arrayValue};
+    mutable std::size_t queue_limit_ = 1;
     mutable std::atomic<std::size_t> limit_{65536};
 };
 } // namespace scrp

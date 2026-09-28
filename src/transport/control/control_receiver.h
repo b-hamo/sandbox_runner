@@ -52,6 +52,18 @@ struct Reply {
 struct Replies {
     std::vector<Reply> messages; // at most ACK + result, no delayed/asynchronous use
     bool finish = false; // close only after all responses have been sent
+    bool deferred = false; // reserve one final response, emitted by Hooks::poll
+};
+struct DeferredReply {
+    std::string correlation_id;
+    Reply reply;
+    bool finish = false;
+};
+struct Hooks {
+    std::function<void(const scrp::Envelope&)> connected;
+    std::function<std::vector<DeferredReply>()> poll;
+    // Must be nonblocking and must not throw. Called on every exit path.
+    std::function<void()> disconnected;
 };
 using ReplyHandler = std::function<Replies(const scrp::Envelope&)>;
 using ReplyHandlers = std::map<std::string, ReplyHandler>;
@@ -62,7 +74,7 @@ public:
     Receiver(Context context, Handlers handlers, Options options = {},
              SocketFactory factory = telemetry::make_winhttp_websocket);
     Receiver(Context context, ReplyHandlers handlers, Options options = {},
-             SocketFactory factory = telemetry::make_winhttp_websocket);
+             SocketFactory factory = telemetry::make_winhttp_websocket, Hooks hooks = {});
     Receiver(const Receiver&) = delete;
     Receiver& operator=(const Receiver&) = delete;
 
@@ -77,6 +89,7 @@ private:
     ReplyHandlers handlers_;
     Options options_;
     SocketFactory factory_;
+    Hooks hooks_;
     mutable std::mutex mutex_;
     Snapshot snapshot_;
     bool started_ = false;

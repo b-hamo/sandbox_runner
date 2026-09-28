@@ -106,3 +106,10 @@ ctest --test-dir build/issue13/tests --output-on-failure
 테스트는 기존 프로세스를 종료하거나 방화벽 규칙을 변경하지 않는다.
 TLS 중계/Host Connection 테스트 listener는 loopback 임시 포트를 사용한다.
 스크립트는 새 테스트 인증서 한 개를 현재 사용자 Root 저장소에 일시 등록하고 finally에서 정확히 제거한다.
+
+## #14 후속 상태
+
+위 #13 결과는 당시의 관리 모드/테스트 핸들러 검증 기록이다.
+#14에서 실제 실행 모듈 및 내부 adapter와 비동기 ACK/결과 경로를 연결했다.
+CLI 관리 모드의 동작은 유지하며, 실제 Host 시작 승인/HTTPS uploader 연결은 아직 필요하다.
+신규 구현과 synthetic GUI 검증의 정확한 범위는 [GUI 연동](gui-integration.md)에 기록한다.

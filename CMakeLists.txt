@@ -35,3 +35,14 @@ target_link_libraries(sandbox_runner PRIVATE runner_control)
 if(MINGW)
     target_link_options(sandbox_runner PRIVATE -static -municode)
 endif()
+
+# Imported Windows GUI executor + trusted SCRP adapter, in the same Runner EXE.
+add_library(runner_gui STATIC
+    src/control/control_types.cpp src/control/control_util.cpp
+    src/control/screen_capture.cpp src/control/input_executor.cpp
+    src/control/action_scheduler.cpp src/runtime/session_workspace.cpp
+    src/runtime/sandbox_runtime.cpp src/gui_session.cpp)
+target_compile_features(runner_gui PUBLIC cxx_std_17)
+target_compile_definitions(runner_gui PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(runner_gui PUBLIC runner_control user32 gdi32 ole32 windowscodecs uuid bcrypt)
+target_link_libraries(runner_lifecycle PUBLIC runner_gui)
