@@ -214,6 +214,6 @@ Sandbox 안에서 인증서를 신뢰하도록 launcher가 준비한 뒤 다음�
 주소는 실제 Host IPv4로 바꾼다. bootstrap에 주소가 지정되어 있으면 일치해야 한다.
 인증서의 SAN도 해당 주소와 일치해야 하며 Windows 인증서 검증을 해제하지 않는다.
 세션 Output 감시를 시작한 뒤 Control에 연결하고, Host 요청에 따라 캡처·PNG 업로드·GUI 명령을 처리한다.
-현재 실제 Sandbox 재검증은 Windows Sandbox 로그인 오류로 막혀 있으며 전체 성공을 확인하지 못했다.
+실제 Codex → Host MCP → Windows Sandbox Runner의 시작 검증·PNG 반환·클릭·한글 입력·정상 종료를 확인했다.
 [현재 통신 계약·실행 경계](docs/host-observation-integration.md),
 [검증 이력](docs/gui-product-validation.md)을 참고한다.

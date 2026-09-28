@@ -6,7 +6,14 @@
 > [Host observation 연결](host-observation-integration.md)을 우선한다.
 
 
-## 범위와 상태
+## 최신 실제 Sandbox 검증
+
+2026-09-28 15:49, 제품 커밋 `df28a54`와 수정하지 않은 Host `6055cc6`으로 전체 흐름을 통과했다.
+실제 Codex MCP 호출로 화면 반환, 클릭, `안녕하세요` 입력, 후속 이미지 확인, 정상 종료를 검증했다.
+재시험에서 발견한 테스트 스크립트의 Notepad 의존성을 제거했으며 제품/Host 소스 수정은 없었다.
+세부 증거와 이전 실패 원인은 [최신 검증 기록](host-observation-integration.md#검증-결과와-제한)을 따른다.
+
+## 이전 기반 검증 당시의 범위와 상태
 
 2026-09-28, 중단 커밋 `40661b6`에서 이어서 검증했다.
 제품 lifecycle owner와 HTTPS 전송 기반의 빌드·검증은 완료했지만,
