@@ -1,4 +1,5 @@
 #pragma once
+#include "control_session.h"
 #include "gui_session.h"
 #include "transport/observation/https_uploader.h"
 

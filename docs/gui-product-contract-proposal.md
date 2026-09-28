@@ -11,7 +11,7 @@
 - Host 검토 checkout: `feat/13-observe-wait`, `d939215b849286375e1c87aff9673ee92d57bd1b`.
   startup/heartbeat/broker/MCP 구현을 포함하는 최신 기능 계열을 읽기 전용으로 검토했다.
 - 이전 Sandbox 실험 기준: `feat/3-auth-tls`, `973822e55196074a46fecd207f5acd16d5cde5ab`.
-- 저장소 및 상위 작업 경로에서 AGENTS.md는 발견되지 않았다.
+- 중단 커밋 재개 시 사용자 제공 및 로컬 AGENTS.md를 확인하고 적용했다.
 
 ## 코드에서 확인한 충족 조건과 공백
 

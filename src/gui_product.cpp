@@ -39,6 +39,8 @@ DWORD run_product_control_session(::control::Context context, HANDLE stop,
     const auto probe = gui.startup_probe();
     check_stop(stop);
     if (!probe.ok) throw std::runtime_error("GUI product startup capture failed");
+    if (std::chrono::steady_clock::now() >= deadline)
+        throw std::runtime_error("GUI product startup capture timed out");
     try { services->prepare(probe, stop, deadline); }
     catch (...) { throw std::runtime_error("GUI Host startup verification failed"); }
     check_stop(stop);

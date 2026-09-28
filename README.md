@@ -203,3 +203,9 @@ OS 감시 버퍼 강제 초과 및 디스크 오류 재현은 아직 검증하�
 기본 `--control-context` CLI는 여전히 관리 모드이며, 실제 GUI 활성화에는 신뢰된
 Host 시작 승인 및 scoped HTTPS uploader의 내부 주입이 필요하다.
 구현/검증/남은 Host 계약과 호출 절차는 [GUI 연동 문서](docs/gui-integration.md)를 따른다.
+
+Issue #17은 제품 lifecycle owner와 실제 HTTPS PNG 업로더의 기반을 추가했다.
+현재 Host는 시작 승인 전달·업로드 권한 발급·PNG 수신 계약을 제공하지 않아
+**일반 EXE의 GUI 활성화는 여전히 미완료**다. CLI 도움말과 실행 로그에 관리 모드를 표시한다.
+[계약 제안 및 연결 경계](docs/gui-product-contract-proposal.md),
+[실행한 검증과 미검증 항목](docs/gui-product-validation.md)을 참고한다.
