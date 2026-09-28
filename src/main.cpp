@@ -4,6 +4,7 @@
 #include "runner_lifecycle.h"
 #include "candidate_telemetry.h"
 #include "control_session.h"
+#include "gui_product.h"
 #include <iostream>
 #include <cwchar>
 
@@ -71,6 +72,7 @@ int wmain(int argc, wchar_t* argv[]) {
                    << L"Default: " << runner::default_output_path
                    << L" (created if missing, watched recursively until stopped)\n"
                    << L"--output: use an existing directory for development/testing\n"
+                   << L"--control-context: management mode; GUI awaits an agreed Host authorization/upload adapter\n"
                    << L"--session-context: explicit local injection; see docs/telemetry.md\n";
         return 0;
     }
@@ -112,7 +114,7 @@ int wmain(int argc, wchar_t* argv[]) {
     DWORD result = ERROR_GEN_FAILURE;
     try {
         if (!control_path.empty()) {
-            result = runner::run_control_session(runner::load_control_context(control_path), stop_event);
+            result = runner::run_product_control_session(runner::load_control_context(control_path), stop_event);
         } else {
             auto context = runner::load_session_context(context_path);
             // A Host adapter may implement both contracts. The current local

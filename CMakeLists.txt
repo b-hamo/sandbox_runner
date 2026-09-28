@@ -25,7 +25,7 @@ add_library(runner_lifecycle STATIC src/session_context.cpp src/runner_lifecycle
 target_link_libraries(runner_lifecycle PUBLIC runner_telemetry)
 add_library(runner_control STATIC src/transport/control/control_receiver.cpp src/protocol/scrp/host_sender_schema.cpp)
 target_link_libraries(runner_control PUBLIC runner_telemetry)
-target_sources(runner_lifecycle PRIVATE src/control_session.cpp)
+target_sources(runner_lifecycle PRIVATE src/control_session.cpp src/gui_product.cpp)
 target_link_libraries(runner_lifecycle PUBLIC runner_control)
 target_link_libraries(sandbox_runner PRIVATE runner_lifecycle)
 target_link_libraries(sandbox_runner PRIVATE runner_control)
@@ -41,7 +41,8 @@ add_library(runner_gui STATIC
     src/control/control_types.cpp src/control/control_util.cpp
     src/control/screen_capture.cpp src/control/input_executor.cpp
     src/control/action_scheduler.cpp src/runtime/session_workspace.cpp
-    src/runtime/sandbox_runtime.cpp src/gui_session.cpp)
+    src/runtime/sandbox_runtime.cpp src/gui_session.cpp
+    src/transport/observation/https_uploader.cpp)
 target_compile_features(runner_gui PUBLIC cxx_std_17)
 target_compile_definitions(runner_gui PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(runner_gui PUBLIC runner_control user32 gdi32 ole32 windowscodecs uuid bcrypt)
