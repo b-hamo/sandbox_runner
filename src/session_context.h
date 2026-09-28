@@ -1,5 +1,6 @@
 #pragma once
 #include "transport/telemetry/telemetry_client.h"
+#include "transport/control/control_receiver.h"
 
 namespace runner {
 // Reuse the existing immutable session + transport contract, including the
@@ -12,4 +13,6 @@ void validate_session_context(const SessionContext& context);
 // Explicit local/bootstrap injection, not a Control HELLO_ACK wire format.
 // Contains credentials: the launcher owns file access permissions and removal.
 SessionContext load_session_context(const std::wstring& path);
+// Separate explicit host-sender-fed305b Control profile; never a Telemetry fallback.
+control::Context load_control_context(const std::wstring& path);
 } // namespace runner

@@ -45,9 +45,9 @@ void validate_tree(const Json::Value& v,unsigned int depth=1) {
     }
     else if(v.isArray()) for(const auto& item:v) validate_tree(item,depth+1);
 }
-// The initial implementation accepts canonical UTC RFC3339 seconds or milliseconds.
+// Host sender emits microseconds; accept its RFC3339 UTC 1..6 digit contract.
 ULONGLONG utc_ticks(const std::string& s) {
-    require(s.size() == 20 || s.size() == 24, "Invalid SCRP timestamp");
+    require(s.size() == 20 || (s.size() >= 22 && s.size() <= 27), "Invalid SCRP timestamp");
     require(s[4]=='-' && s[7]=='-' && s[10]=='T' && s[13]==':' && s[16]==':' && s.back()=='Z', "Invalid SCRP timestamp");
     auto number = [&](std::size_t p, std::size_t n) {
         WORD v = 0;
@@ -57,13 +57,21 @@ ULONGLONG utc_ticks(const std::string& s) {
     SYSTEMTIME t{};
     t.wYear=number(0,4); t.wMonth=number(5,2); t.wDay=number(8,2);
     t.wHour=number(11,2); t.wMinute=number(14,2); t.wSecond=number(17,2);
-    if (s.size()==24) { require(s[19]=='.', "Invalid SCRP timestamp"); t.wMilliseconds=number(20,3); }
+    ULONGLONG fraction = 0;
+    if (s.size() != 20) {
+        require(s[19]=='.', "Invalid SCRP timestamp");
+        for (std::size_t i=20; i<s.size()-1; ++i) {
+            require(s[i]>='0' && s[i]<='9', "Invalid SCRP timestamp");
+            fraction = fraction*10 + s[i]-'0';
+        }
+        for (std::size_t digits=s.size()-21; digits<7; ++digits) fraction *= 10;
+    }
     FILETIME ft{};
     require(SystemTimeToFileTime(&t, &ft), "Invalid SCRP date");
     SYSTEMTIME round{}; FileTimeToSystemTime(&ft, &round);
     require(round.wYear==t.wYear && round.wMonth==t.wMonth && round.wDay==t.wDay,
             "Invalid SCRP calendar date");
-    return (ULONGLONG(ft.dwHighDateTime)<<32) | ft.dwLowDateTime;
+    return ((ULONGLONG(ft.dwHighDateTime)<<32) | ft.dwLowDateTime) + fraction;
 }
 void validate_shape(const Envelope& e) {
     validate_session(e.session);

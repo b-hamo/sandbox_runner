@@ -1,6 +1,7 @@
 #include "session_context.h"
 #include "artifact_candidate_adapter.h"
 #include "protocol/scrp/artifact_candidate.h"
+#include "protocol/scrp/host_sender_schema.h"
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -76,7 +77,7 @@ void validate_session_context(const SessionContext& context) {
     catch (...) { throw std::invalid_argument("Invalid or unavailable Telemetry credential"); }
 }
 
-SessionContext load_session_context(const std::wstring& path) {
+static SessionContext load_context(const std::wstring& path, bool control_mode) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     require(file != INVALID_HANDLE_VALUE, "Cannot open session configuration");
@@ -87,7 +88,10 @@ SessionContext load_session_context(const std::wstring& path) {
     require(ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr) &&
             count <= 65536, "Cannot read session configuration or size exceeds limit");
     const auto root = scrp::parse_json(std::string(buffer.data(), count), 65536);
-    if (root.isMember("event_contract")) {
+    if (control_mode) {
+        fields(root, {"session_id", "runtime_id", "generation", "endpoint", "credential", "tls", "control_contract"});
+        require(root["control_contract"] == "host-sender-fed305b", "Unsupported Control contract");
+    } else if (root.isMember("event_contract")) {
         fields(root, {"session_id", "runtime_id", "generation", "endpoint", "credential", "tls", "handshake", "event_contract"});
         require(root["event_contract"] == scrp::artifact_candidate_contract, "Unsupported event contract");
     } else {
@@ -117,10 +121,24 @@ SessionContext load_session_context(const std::wstring& path) {
     telemetry::ChannelCredential supplied{wide(credential["header_name"]), wide(credential["header_value"]),
         std::chrono::system_clock::time_point(std::chrono::seconds(expiry.asInt64()))};
     context.credential = [supplied] { return supplied; };
+    if (control_mode) {
+        scrp::validate_session(context.session);
+        telemetry::validate_connection_settings(context.connection);
+        telemetry::validate_credential(supplied);
+        require(supplied.header_name == L"Authorization" && supplied.header_value.compare(0,7,L"Bearer ") == 0 &&
+                supplied.header_value.size() > 7, "Control bootstrap requires Authorization Bearer");
+        return context;
+    }
     context.schema = std::make_shared<InjectedHandshake>(root["handshake"]);
     if (root.isMember("event_contract"))
         context.schema = std::make_shared<ArtifactCandidateAdapter>(context.schema);
     validate_session_context(context);
     return context;
+}
+SessionContext load_session_context(const std::wstring& path) { return load_context(path, false); }
+control::Context load_control_context(const std::wstring& path) {
+    auto base = load_context(path, true);
+    return {std::move(base.session), std::move(base.connection), std::move(base.credential),
+            std::make_shared<scrp::HostSenderSchema>()};
 }
 } // namespace runner
