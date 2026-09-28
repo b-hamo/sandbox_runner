@@ -14,5 +14,5 @@ void validate_session_context(const SessionContext& context);
 // Contains credentials: the launcher owns file access permissions and removal.
 SessionContext load_session_context(const std::wstring& path);
 // Separate explicit host-sender-fed305b Control profile; never a Telemetry fallback.
-control::Context load_control_context(const std::wstring& path);
+::control::Context load_control_context(const std::wstring& path);
 } // namespace runner

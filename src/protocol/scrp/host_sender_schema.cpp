@@ -110,6 +110,8 @@ std::string HostSenderSchema::hello_ack(const Envelope& e) const {
     fields(p["channel_credentials"],{"telemetry","reconnect"});
     credential(p["channel_credentials"]["telemetry"]); credential(p["channel_credentials"]["reconnect"]);
     limit_ = l["max_message_bytes"].asUInt64();
+    allowed_ = p["allowed_capabilities"];
+    queue_limit_ = l["max_queue_depth"].asUInt64();
     // Credentials are validated but not used before the separate channel contract is agreed.
     return e.connection_id.asString();
 }
@@ -141,7 +143,31 @@ void HostSenderSchema::validate_reply(const Envelope& e) const {
               e.error["retryable"].isBool() && (e.error["recommended_next_step"].isNull() || text(e.error["recommended_next_step"],1,64)));
         return;
     }
+    if (e.type == "ACK") {
+        fields(p,{"queue_position","reject_reason"});
+        check(e.error.isNull() && one(e.status,{"ACCEPTED","REJECTED"}));
+        if (e.status == "ACCEPTED") check(number(p["queue_position"],0,32) && p["reject_reason"].isNull());
+        else check(p["queue_position"].isNull() && text(p["reject_reason"],1,256));
+        return;
+    }
+    if (e.type == "ACTION_RESULT") {
+        fields(p,{"execution_time_ms","result"});
+        check(e.error.isNull() && one(e.status,{"SUCCESS","PARTIAL_SUCCESS","FAILED","UNKNOWN","BLOCKED"}));
+        check(number(p["execution_time_ms"],0,Json::UInt64(-1)));
+        const auto& r = p["result"];
+        fields(r,{"input_delivered","chars_sent","detail"});
+        check(r["input_delivered"].isBool() && number(r["chars_sent"],0,4096) && text(r["detail"],0,1024));
+        return;
+    }
     check(e.status == "OK" && e.error.isNull());
+    if (e.type == "OBSERVE_RESULT") {
+        fields(p,{"observation_id","width","height","captured_at","sha256","upload_id"});
+        check(host_id(p["observation_id"]) && number(p["width"],1,16384) && number(p["height"],1,16384));
+        check(p["width"].asUInt64()*p["height"].asUInt64() <= 16000000);
+        date(p["captured_at"]); upload(p["upload_id"]);
+        check(text(p["sha256"],64,64) && p["sha256"].asString().find_first_not_of("0123456789abcdef") == std::string::npos);
+        return;
+    }
     if (e.type == "ALIVE") {
         fields(p,{"runtime_state","worker_alive","queue_depth","uptime_ms"}); runtime(p);
         check(number(p["uptime_ms"],0,Json::UInt64(-1)));

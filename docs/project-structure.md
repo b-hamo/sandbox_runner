@@ -9,6 +9,8 @@ Telemetry 시작·READY 확인·종료를 제품 진입점에 연결했다.
 Issue #13에서 Control HELLO/HELLO_ACK·요청 수신·검증·분배 모듈을 추가했다.
 Host `feat/1-host-sender`의 fed305b 스키마 adapter와 응답 송신을 추가하고,
 main의 `--control-context` 관리 모드에 연결했다. Artifact/Telemetry 모드와는 별도로 선택한다.
+Issue #14에서 제공 GUI 실행 모듈과 `GuiSession` 내부 adapter·비동기 결과 경로를 통합했다.
+실제 GUI 활성화에는 Host 시작 승인/HTTPS upload adapter 주입이 필요하다. [GUI 연동 문서](gui-integration.md)를 따른다.
 Issue #9에서 Candidate 콜백과 TelemetryClient 사이에 `CandidateTelemetry` 변환 계층을 연결했다.
 Issue #11에서 `artifact-candidate-v1` payload·ACK 계약안과 제품 `ArtifactCandidateAdapter`를 구현했다.
 로컬 Context의 명시적 `event_contract` 선택으로 실제 후보 전송을 활성화한다. 미선택 시 기존
@@ -30,7 +32,8 @@ handshake-only 동작을 유지한다. Host 공유·합의 상태는 [계약 문
 기본값이며, 타입별 필수·nullable 필드는 후속 확정 스키마를 따른다.
 
 이후 합의된 Artifact 설계 변경을 우선 적용한다. Runner는 Defender 검사를 수행하지 않고,
-SHA-256 계산·MIME 판별·수신 파일 크기 검증은 Host Quarantine에서 수행한다.
+Artifact 파일의 SHA-256 계산·MIME 판별·수신 파일 크기 검증은 Host Quarantine에서 수행한다.
+GUI 관찰 PNG의 SHA-256은 별도 OBSERVE_RESULT 계약에 따라 Runner가 계산한다.
 Runner는 크기 등 메타데이터를 **안정화 관찰 목적**으로만 사용한다.
 
 ## 2. 현재 구현 구조
@@ -47,6 +50,9 @@ sandbox_runner/
 │  ├─ session_context.h / session_context.cpp
 │  ├─ runner_lifecycle.h / runner_lifecycle.cpp
 │  ├─ control_session.h / control_session.cpp
+│  ├─ gui_session.h / gui_session.cpp
+│  ├─ control/ (control_types, control_util, screen_capture, input_executor, action_scheduler)
+│  ├─ runtime/ (session_workspace, sandbox_runtime)
 │  ├─ candidate_telemetry.h / candidate_telemetry.cpp
 │  ├─ artifact_candidate_adapter.h / artifact_candidate_adapter.cpp
 │  ├─ protocol/scrp/
@@ -73,6 +79,7 @@ sandbox_runner/
    ├─ artifact-candidate-contract.md
    ├─ control-receiver.md
    ├─ host-sender-integration.md
+   ├─ gui-integration.md
    └─ telemetry.md
 ```
 
@@ -86,7 +93,10 @@ sandbox_runner/
 | `src/runner_paths.h` | 기본 Output 경로 `C:\RunnerWorkspace\Output` 정의 |
 | `src/session_context.*` | Telemetry Context 및 별도 Control Context의 명시적 로컬 JSON 입력·자격/TLS 검증 |
 | `src/runner_lifecycle.*` | 주입 Context로 Client 생성·시작, 취소 가능한 READY 대기, 실패 시 RAII 정리 |
-| `src/control_session.*` | Control worker·stop/join, 관리 요청 응답, 미구현 GUI/업로드 거부, TERMINATE 이후 종료 |
+| `src/control_session.*` | Control 수신 worker·stop/join, 기본 관리 모드 및 선택적 GuiSession 연결 |
+| `src/gui_session.*` | 검증 요청 변환, Host grant·lease, ACK/결과 큐, scoped uploader 주입, 비동기 종료 |
+| `src/control/*` | Windows 캡처·입력, 직렬 Scheduler·ledger·좌표 관찰 유효성 |
+| `src/runtime/*` | Guest workspace 및 실행 권한·lease·차단, Host VM Manager와 구분 |
 | `src/protocol/scrp/host_sender_schema.*` | Host fed305b 초안 호환 HELLO/ACK·요청·제품 응답 검증, negotiated 메시지 한도 |
 | `src/candidate_telemetry.*` | Candidate 콜백의 중복·무효화 추적, 외부 계약으로 SecurityEvent 변환, 기존 Client enqueue·거부 진단 |
 | `src/artifact_candidate_adapter.*` | 기존 handshake schema를 유지하면서 CandidateEventContract·TelemetrySchema의 후보 payload·ACK 연결 |
@@ -100,7 +110,7 @@ sandbox_runner/
 | `src/transport/telemetry/pending_event_store.*` | 미확인 이벤트 보관, 중복·충돌·용량 제한, 명시적 만료 |
 | `src/transport/telemetry/winhttp_websocket.*` | WinHTTP 비동기 WSS, 인증 헤더 주입, TLS 검증, 프레임 재조립·취소 |
 | `src/transport/control/control_receiver.*` | Control handshake·요청 검증·핸들러 분배·응답 상관관계/송신 sequence, 취소·실패·소켓 정리 |
-| `CMakeLists.txt` | 단일 Runner, `runner_telemetry` OBJECT와 `runner_lifecycle`/`runner_control` STATIC, 제품 빌드만 구성 |
+| `CMakeLists.txt` | 단일 Runner, `runner_telemetry` OBJECT와 `runner_lifecycle`/`runner_control`/`runner_gui` STATIC, 제품 빌드만 구성 |
 
 기존 `output_watcher`를 새 감시기로 교체하지 않는다. 후보 상태는 현재
 `CandidateDetector` 내부에서 관리한다. `CandidateTelemetry`는 보고한 관찰의 ID·세대만 추적하며
@@ -111,7 +121,10 @@ sandbox_runner/
 `--control-context` 선택 시에는 `main → load_control_context → run_control_session → Receiver`로
 연결한다. 수신 worker는 HELLO_ACK 이후 요청을 검증하고 관리 응답을 송신한다.
 TERMINATE_RESULT 송신 또는 콘솔 취소 후 socket close·worker join·종료 이벤트 정리 순서로 끝난다.
-이 모드의 GUI Worker와 Coverage는 비활성이며 Runtime READY를 주장하지 않는다.
+CLI 기본 관리 모드의 GUI Worker와 Coverage는 비활성이며 Runtime READY를 주장하지 않는다.
+신뢰된 호출자가 GuiSession을 주입하면 WSS 수신 → 직렬 GUI Worker → bounded 결과 큐 → WSS 응답으로 연결한다.
+캡처는 전용 uploader의 성공 확인 후 메타데이터를 응답하고, 연결 단절은 Runtime을 즉시 block한다.
+시작/종료 흐름과 Host 계약 차이는 [GUI 연동 문서](gui-integration.md)에 상세히 기록한다.
 아래 기존 Artifact/Telemetry 흐름은 `--session-context` 모드에서만 실행된다.
 
 ```text
@@ -234,11 +247,12 @@ src/
 │  ├─ candidate_detector.*
 │  ├─ file_stability.*
 │  └─ [후속] 후보 ID·보고·승인된 전송 요청 연결
-├─ control/                       [후속] 화면 관찰·GUI 입력 실행
+├─ control/                       [현재] 화면 관찰·GUI 입력·직렬 실행
+├─ runtime/                       [현재] Guest workspace·권한·lease (Host VM Manager 아님)
 ├─ protocol/
 │  └─ scrp/                       [현재] Envelope·Telemetry 타입 / [후속] Host 확정 스키마
 └─ transport/
-   ├─ control/                    [현재] handshake·수신·응답 / [후속] 비동기 Worker 연결
+   ├─ control/                    [현재] handshake·수신·응답·비동기 Worker 연결
    ├─ telemetry/                  [현재] 이벤트 WSS 연결·ACK·재전송
    └─ [후속] 승인된 HTTPS 업로드
 ```
@@ -281,7 +295,8 @@ Git에서 제외된 로컬 검증 코드에만 존재하며 제품 기본 스키
 호출자가 수신 스레드와 stop/join을 소유하며, Receiver는 종료·실패 시 소켓을 정리한다.
 main의 명시적 Control 모드에서 기동한다. 사용법·검증·한도는 [수신부 문서](control-receiver.md)를 따른다.
 
-후속 제어 채널 전체 기능에서는 비동기 Worker 연결과 Action 상태 기록도 담당한다.
+Issue #14의 GuiSession이 비동기 Worker 연결과 실제 Action 상태 조회를 담당한다.
+Receiver의 Hooks::poll은 ACK 송신 이후 완료를 처리하고, disconnected는 Runtime을 차단한다.
 명세상 `HELLO / HELLO_ACK`, `OBSERVE / OBSERVE_RESULT`, `ACTION_REQUEST / ACK / ACTION_RESULT`,
 `STATE_REQUEST / STATE_RESULT`, `HEARTBEAT / ALIVE`, `ARTIFACT_REQUEST / ARTIFACT_RESULT`,
 `TERMINATE / TERMINATE_RESULT`가 이 채널을 사용한다.
@@ -386,7 +401,9 @@ Host 합의는 대기 상태로 기록한다. 기존 Envelope 필드를 다른 �
 Host의 MSYS2 UCRT64 환경에서 CMake/Ninja로 Windows EXE를 빌드한다.
 C++ 표준과 도구 버전은 팀 결정에 따르며 이 문서에서 새로 고정하지 않는다.
 JsonCpp는 Host 빌드 의존성이고 `jsoncpp_static`으로 연결한다. WinHTTP·BCrypt·Crypt32는
-Windows 기본 DLL을 사용한다. 검증 환경 버전은 Telemetry 문서에 기록하며 팀 동결값으로 간주하지 않는다.
+Windows 기본 DLL을 사용한다. GUI는 User32/GDI32/Ole32 및 WIC COM을 사용한다.
+GUI target은 제공 모듈의 optional/filesystem에 필요한 cxx_std_17 최소 기능을 요구한다.
+검증 환경 버전은 Telemetry 문서에 기록하며 팀 동결값으로 간주하지 않는다.
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release

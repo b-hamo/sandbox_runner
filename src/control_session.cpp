@@ -1,14 +1,15 @@
 #include "control_session.h"
+#include "gui_session.h"
 #include <thread>
 #include <iostream>
 
 namespace runner {
-control::ReplyHandlers management_handlers() {
+::control::ReplyHandlers management_handlers() {
     const auto started = std::chrono::steady_clock::now();
-    control::ReplyHandlers handlers;
+    ::control::ReplyHandlers handlers;
     for (const auto type : {"HEARTBEAT","STATE_REQUEST","TERMINATE","OBSERVE","ACTION_REQUEST","ARTIFACT_REQUEST"}) {
         handlers[type] = [started](const scrp::Envelope& e) {
-            control::Reply reply;
+            ::control::Reply reply;
             bool finish = false;
             if (e.type == "HEARTBEAT" || e.type == "STATE_REQUEST") {
                 reply.type = e.type == "HEARTBEAT" ? "ALIVE" : "STATE_RESULT";
@@ -36,26 +37,29 @@ control::ReplyHandlers management_handlers() {
                 reply.error["retryable"] = false;
                 reply.error["recommended_next_step"] = "IMPLEMENT_WORKER";
             }
-            return control::Replies{{std::move(reply)}, finish};
+            return ::control::Replies{{std::move(reply)}, finish};
         };
     }
     return handlers;
 }
 
-DWORD run_control_session(control::Context context, HANDLE stop_event) {
-    control::Receiver receiver(std::move(context), management_handlers());
+DWORD run_control_session(::control::Context context, HANDLE stop_event, GuiSession* gui) {
+    if (gui) context.schema = gui->schema();
+    ::control::Receiver receiver(std::move(context), gui ? gui->handlers() : management_handlers(), {},
+        telemetry::make_winhttp_websocket, gui ? gui->hooks() : ::control::Hooks{});
     std::atomic<bool> stop{false}, done{false};
     std::thread worker([&] { receiver.run(stop); done = true; });
     DWORD result = ERROR_SUCCESS;
     while (!done) {
         const auto wait = WaitForSingleObject(stop_event, 20);
-        if (wait == WAIT_OBJECT_0) { stop = true; break; }
-        if (wait == WAIT_FAILED) { result = GetLastError(); stop = true; break; }
+        if (wait == WAIT_OBJECT_0) { if (gui) gui->block(); stop = true; break; }
+        if (wait == WAIT_FAILED) { result = GetLastError(); if (gui) gui->block(); stop = true; break; }
     }
     worker.join();
+    if (gui) gui->stop();
     const auto snapshot = receiver.snapshot();
     std::cout << "Control stopped dispatched=" << snapshot.dispatched << '\n';
-    if (snapshot.state == control::State::failed) {
+    if (snapshot.state == ::control::State::failed) {
         std::cerr << snapshot.diagnostic << '\n';
         return ERROR_GEN_FAILURE;
     }

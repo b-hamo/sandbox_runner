@@ -136,7 +136,7 @@ static SessionContext load_context(const std::wstring& path, bool control_mode) 
     return context;
 }
 SessionContext load_session_context(const std::wstring& path) { return load_context(path, false); }
-control::Context load_control_context(const std::wstring& path) {
+::control::Context load_control_context(const std::wstring& path) {
     auto base = load_context(path, true);
     return {std::move(base.session), std::move(base.connection), std::move(base.credential),
             std::make_shared<scrp::HostSenderSchema>()};
