@@ -84,9 +84,17 @@ HELLO_ACK 수신 중 만료, 인증 후 수신 중 만료, 인증 후 idle 중 �
 기존 gui_runtime/gui_session 테스트의 lease 만료 및 연결 단절 시 입력 차단도 통과했다.
 테스트 소스는 저장소 기존 방침대로 Git에서 제외된 로컬 `tests/`에 보관한다.
 
-실제 Windows Sandbox에서 5분을 넘기는 장시간 연결과 새 EXE 배포는 이번 검증에 포함하지 않았다.
-배포 검증 시 새 bootstrap으로 연결하고 6분 이상 HEARTBEAT/ALIVE와 connected 상태를 확인한 뒤,
-OBSERVE·STATE_REQUEST 및 TERMINATE 결과를 확인한다. 기존 만료 bootstrap을 재사용하지 않는다.
+2026-09-29 실제 Windows Sandbox에 수정 EXE를 배포하고 Host `6055cc6`의 MCP stdio
+`tools/call`로 추가 검증했다. 기존 데스크톱 MCP의 만료된 세션과 분리한 새 테스트 세션이다.
+14:40:39 KST에 발급한 bootstrap은 14:45:39에 만료됐으며, 14:46:39에도
+`runtime_get_state`가 Runtime의 `READY / health=OK / connected=true`를 반환했다.
+같은 연결에서 만료 1분 후 `computer_observe`도 `image_state=VALIDATED`로 PNG를 반환했다.
+실제 5분 만료를 넘긴 연결 유지·상태 조회·화면 업로드는 통과했다.
+
+후속 입력 검사에 사용하려던 `Win+R`은 Host의 `P-DENY-HOTKEY` 정책으로 거부됐다.
+이 예상하지 못한 정책 응답에서 테스트 클라이언트가 종료됐으므로 문자 입력과
+`session_stop`/TERMINATE 정상 종료 검증은 완료하지 않았다. 정책을 우회하거나 해제하지 않았다.
+배포 EXE SHA-256: `6BC6A7C26AF6AEA3FFFF2C326A657EADB10BFE279D688CFC1AF37C0AE2A036EF`.
 
 ## 제품 실행과 후속 범위
 
