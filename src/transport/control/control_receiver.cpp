@@ -109,8 +109,12 @@ void Receiver::run(const std::atomic<bool>& stop) {
             socket->send(wire, stop);
         };
         while (!stop) {
-            require(std::chrono::system_clock::now() < credential.expires_at);
-            if (connection.empty()) require(std::chrono::steady_clock::now() < deadline);
+            // Bootstrap credentials admit a connection; they do not expire an
+            // authenticated session. Runtime heartbeat leases govern that session.
+            if (connection.empty()) {
+                require(std::chrono::system_clock::now() < credential.expires_at);
+                require(std::chrono::steady_clock::now() < deadline);
+            }
             if (!connection.empty() && hooks_.poll) {
                 const auto ready = hooks_.poll();
                 require(ready.size() <= 34);
@@ -128,8 +132,10 @@ void Receiver::run(const std::atomic<bool>& stop) {
             std::string incoming;
             if (!socket->receive(incoming, std::chrono::milliseconds(20), stop)) continue;
             if (stop) break;
-            require(std::chrono::system_clock::now() < credential.expires_at);
-            if (connection.empty()) require(std::chrono::steady_clock::now() < deadline);
+            if (connection.empty()) {
+                require(std::chrono::system_clock::now() < credential.expires_at);
+                require(std::chrono::steady_clock::now() < deadline);
+            }
             const auto request = scrp::parse_envelope(incoming, message_limit);
             scrp::validate_incoming(request, context_.session, sequence);
             require(sequence <= options_.max_messages);
@@ -142,6 +148,8 @@ void Receiver::run(const std::atomic<bool>& stop) {
                         request.connection_id.asString() == connection);
                 message_limit = std::min(message_limit, context_.schema->message_limit());
                 require(message_limit > 0);
+                require(std::chrono::system_clock::now() < credential.expires_at);
+                require(std::chrono::steady_clock::now() < deadline);
                 if (hooks_.connected) hooks_.connected(request);
                 state(State::receiving);
                 diagnostic = "Control request rejected or connection lost";

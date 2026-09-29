@@ -32,7 +32,7 @@ timestamp 허용 오차, 연결 내 message_id·nonce 중복을 검증한다.
 ACTION_REQUEST와 OBSERVE는 task_id/action_id가 필요하며 같은 action_id를 다시 전달하지 않는다.
 동일 ID의 다른 payload도 거부한다. 실행 기록·상태 조회 및 연결 간 중복 방지는 후속 계층의 책임이다.
 
-잘못된 메시지·스키마·미등록 핸들러·핸들러 예외·연결 끊김·자격 만료는 FAILED로 끝난다.
+잘못된 메시지·스키마·미등록 핸들러·핸들러 예외·연결 끊김·인증 완료 전 자격 만료는 FAILED로 끝난다.
 `snapshot().diagnostic`은 고정 진단만 제공하고 peer payload나 자격을 로그에 노출하지 않는다.
 `ReplyHandlers`는 최대 2개 응답(ACK + 결과)을 반환할 수 있다. 전체 batch를 검증한 후 송신한다.
 제품은 ALIVE, STATE_RESULT, TERMINATE_RESULT 및 미지원 요청에 대한 ERROR를 보낸다.
@@ -70,7 +70,31 @@ WSS 어댑터는 기존 `telemetry::WebSocket`/WinHTTP 구현을 별도 인스�
 replay 기록은 연결당 기본 65,536개 메시지(HELLO_ACK 포함)까지이며 초과 입력은 연결을 종료한다.
 action_id는 기록 메모리 제한을 위해 256바이트까지 허용한다. 이는 구현의 로컬 한도이며 동결된 wire 스키마가 아니다.
 수신 취소는 20ms poll과 기존 WinHTTP 취소 경로를 사용한다. 자동 재연결·요청 재전달은 없다.
-특히 bootstrap token을 자동 재사용하지 않는다. 자격 만료는 보수적으로 연결을 종료한다.
+특히 bootstrap token을 자동 재사용하지 않는다. 자격 만료는 접속 전·직후와
+HELLO_ACK 검증 완료 전까지 검사한다. 인증 완료 후에는 bootstrap token 만료만으로
+기존 연결을 종료하지 않는다. Runtime의 heartbeat lease와 연결/세션 검증은 계속 적용한다.
+
+### Issue #19 검증 (2026-09-29)
+
+MSYS2 UCRT64 GCC 16.2.0, CMake/Ninja Release 제품 빌드와 로컬 CTest 12개를 통과했다.
+Control 수신부는 39개 시나리오를 통과했다. 추가한 6개는 접속 전 만료, 접속 중 만료,
+HELLO_ACK 수신 중 만료, 인증 후 수신 중 만료, 인증 후 idle 중 만료,
+인증 후 만료 상태에서도 잘못된 connection ID 거부를 확인한다.
+동일 테스트가 수정 전 develop 코드에서 실패하고 수정 후 통과함을 확인했다.
+기존 gui_runtime/gui_session 테스트의 lease 만료 및 연결 단절 시 입력 차단도 통과했다.
+테스트 소스는 저장소 기존 방침대로 Git에서 제외된 로컬 `tests/`에 보관한다.
+
+2026-09-29 실제 Windows Sandbox에 수정 EXE를 배포하고 Host `6055cc6`의 MCP stdio
+`tools/call`로 추가 검증했다. 기존 데스크톱 MCP의 만료된 세션과 분리한 새 테스트 세션이다.
+14:40:39 KST에 발급한 bootstrap은 14:45:39에 만료됐으며, 14:46:39에도
+`runtime_get_state`가 Runtime의 `READY / health=OK / connected=true`를 반환했다.
+같은 연결에서 만료 1분 후 `computer_observe`도 `image_state=VALIDATED`로 PNG를 반환했다.
+실제 5분 만료를 넘긴 연결 유지·상태 조회·화면 업로드는 통과했다.
+
+후속 입력 검사에 사용하려던 `Win+R`은 Host의 `P-DENY-HOTKEY` 정책으로 거부됐다.
+이 예상하지 못한 정책 응답에서 테스트 클라이언트가 종료됐으므로 문자 입력과
+`session_stop`/TERMINATE 정상 종료 검증은 완료하지 않았다. 정책을 우회하거나 해제하지 않았다.
+배포 EXE SHA-256: `6BC6A7C26AF6AEA3FFFF2C326A657EADB10BFE279D688CFC1AF37C0AE2A036EF`.
 
 ## 제품 실행과 후속 범위
 
