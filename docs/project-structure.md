@@ -135,6 +135,9 @@ sandbox_runner/
 연결한다. 수신 worker는 HELLO_ACK 이후 요청을 검증하고 관리 응답을 송신한다.
 TERMINATE_RESULT 송신 또는 콘솔 취소 후 socket close·worker join·종료 이벤트 정리 순서로 끝난다.
 `--host-bootstrap`은 Output 감시 준비 → WSS HELLO → HELLO_ACK → GUI Worker 시작 → Host의 STATE/OBSERVE/HEARTBEAT 시작 검증 순서다.
+Issue #21에서 `host_gui`의 bootstrap 검증은 기존 11개 필수 필드에 선택
+`host_certificate_sha256`을 허용한다. 있으면 인증서 DER에서 계산한 SHA-256과 비교하고,
+없으면 기존 계산 경로를 유지한다. 미정의 필드 거부와 기존 TLS 검증은 유지한다.
 Host가 READY 이후 입력을 발행하며, 요청받은 OBSERVE에만 PNG를 전송한다. 종료/단절 또는 감시 오류는 입력을 차단하고 Worker·전송·감시 스레드를 정리한다.
 GUI 모드의 Output 감시는 현재 알림 수와 건강 상태를 관리하며 Candidate/Telemetry 반출 흐름은 별도다.
 

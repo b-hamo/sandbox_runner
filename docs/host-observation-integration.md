@@ -4,6 +4,9 @@
 
 Host 저장소 `b-hamo/host_control`, `feat/19-observation-upload`의 `6055cc6`을 수정하지 않고 연결한다.
 이 문서의 상수는 해당 Host 구현에 대한 호환 프로필이며 SCRP 전체의 동결 규격이 아니다.
+Issue #21에서 Host PR #23/#25 (`b08a74d`)가 추가한 bootstrap 인증서 SHA-256 필드를
+하위 호환으로 지원한다. 이것은 bootstrap 입력 호환성 수정이며 해당 Host/Manager의
+전체 기동·TLS·GUI·종료 흐름에 대한 실환경 통합 검증 완료를 뜻하지 않는다.
 2026-09-28 사용자 확인: `monitoring_coverage.file=true`는 **세션 Output 폴더 감시**를 뜻한다.
 전체 Sandbox 파일 활동 감시나 보안 검사 완료를 뜻하지 않는다.
 
@@ -14,6 +17,13 @@ Host 저장소 `b-hamo/host_control`, `feat/19-observation-upload`의 `6055cc6`�
 ```
 
 - 원본 Host bootstrap v1.0을 읽는다. JSON은 64 KiB로 제한하고 필드/버전/ID/포트/만료를 검증한다.
+- 필수 최상위 필드는 `bootstrap_version`, `session_id`, `runtime_id`, `generation`,
+  `host`, `port`, `path`, `token`, `token_expires_at`, `host_certificate_pem`, `observation_upload`다.
+  `host_certificate_sha256`만 선택 필드로 추가 허용한다. 미정의 필드와 필수 필드 누락은 거부한다.
+- 선택 해시는 인증서 **DER 바이트**의 SHA-256을 표현한 소문자 16진수 64자리 문자열이다.
+  PEM 문자열 자체의 해시가 아니다. null·다른 타입·대문자·공백·잘못된 길이는 거부하며,
+  PEM에서 직접 계산한 해시와 다르면 접속 전에 `Bootstrap certificate SHA-256 mismatch`로 거부한다.
+  필드가 없으면 이전처럼 PEM에서 pin을 계산한다. 제공된 해시로 계산된 pin을 덮어쓰지 않는다.
 - Host MCP의 `host:null`에는 launcher가 실제 Host IPv4를 명시한다. 임의 gateway 추정은 하지 않는다.
   bootstrap이 주소를 지정하면 CLI 주소와 일치해야 한다. 현재 DNS/IPv6 주소 입력은 지원하지 않는다.
 - launcher는 신뢰 앵커와 주소 SAN이 유효한 인증서를 준비해야 한다. Runner가 인증서를 설치하거나
@@ -31,6 +41,17 @@ Host 저장소 `b-hamo/host_control`, `feat/19-observation-upload`의 `6055cc6`�
 - 세션·세대·connection·task·action·관찰 좌표 바인딩, 연결 단절/lease 만료/종료 차단을 유지한다.
   Output 건강 상태가 회복되어도 이미 차단된 세션을 자동 재활성화하지 않는다.
 - 캡처는 Host OBSERVE 요청에만 수행한다. 주기적인 화면 전송이나 시작 시 임의 캡처는 없다.
+
+## Issue #21 bootstrap 검증 (2026-09-30)
+
+실제 제품 EXE의 입력 경로로 기존 11개/신규 12개 필드, PEM LF/CRLF,
+잘못된 해시 타입·형식·값, PEM 텍스트 해시, 미정의 필드, 모든 필수 필드의
+누락 및 미정의 필드로 교체를 검사한 로컬 테스트 63개를 통과했다.
+정상 입력은 인증서 검사 다음의 만료 자격 검사까지 도달하는지 확인한다.
+테스트 자격은 의도적으로 만료시켜 실제 네트워크/GUI 기동을 하지 않는다.
+테스트는 기존 방침대로 로컬 `tests/bootstrap_sha256_test.py`에 보관한다.
+MSYS2 UCRT64 Release 빌드 및 기존 CTest 12개도 통과했다.
+새 Host PR #25와 Runtime Manager의 실제 Sandbox 전체 통합 시험은 별도 수행해야 한다.
 
 ## PNG 수신 계약
 
