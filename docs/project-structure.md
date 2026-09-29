@@ -314,6 +314,9 @@ Git에서 제외된 로컬 검증 코드에만 존재하며 제품 기본 스키
 `control::Receiver`가 제어 WSS 연결·HELLO handshake·요청 수신·검증·분배를 담당한다.
 외부 Schema가 닫힌 payload를 검증하고 등록된 핸들러만 호출한다. 응답 batch를 검증하고 송신하며 자동 재연결은 없다.
 호출자가 수신 스레드와 stop/join을 소유하며, Receiver는 종료·실패 시 소켓을 정리한다.
+Issue #19부터 bootstrap credential 만료는 접속 및 HELLO_ACK 인증 완료 전까지만 검사한다.
+인증된 연결의 수명은 bootstrap 만료와 분리하며, 기존 Runtime heartbeat lease 및
+연결 단절 시 입력 차단은 유지한다. 토큰 갱신이나 자동 재연결은 추가하지 않는다.
 main의 명시적 Control 모드에서 기동한다. 사용법·검증·한도는 [수신부 문서](control-receiver.md)를 따른다.
 
 Issue #14의 GuiSession이 비동기 Worker 연결과 실제 Action 상태 조회를 담당한다.

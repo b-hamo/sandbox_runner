@@ -94,4 +94,6 @@ Codex JSONL은 이미지 바이트를 보존하지 않으므로 이미지 보관
 이 연결은 Output 알림 감시와 GUI를 함께 실행한다. Candidate 생성/Telemetry 전송/Artifact 반출은
 별도 계약과 구현 경로이며 여기서 동시에 연결하지 않았다. 네트워크 정책 설정·검증은 외부 Runtime/Host 책임이다.
 Control 재연결 및 bootstrap credential 만료 후 갱신은 현재 제품 경로에서 지원하지 않는다.
+bootstrap 만료는 새 연결의 인증 기한이다. 유효한 HELLO_ACK로 인증된 기존 Control
+연결은 그 시각을 넘어 유지하며, heartbeat lease·연결 단절·TERMINATE 규칙을 따른다.
 Host 소스가 바뀌면 정책 revision, lease, 업로드 만료/상한/응답 계약의 호환성을 다시 확인해야 한다.

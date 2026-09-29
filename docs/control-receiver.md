@@ -32,7 +32,7 @@ timestamp 허용 오차, 연결 내 message_id·nonce 중복을 검증한다.
 ACTION_REQUEST와 OBSERVE는 task_id/action_id가 필요하며 같은 action_id를 다시 전달하지 않는다.
 동일 ID의 다른 payload도 거부한다. 실행 기록·상태 조회 및 연결 간 중복 방지는 후속 계층의 책임이다.
 
-잘못된 메시지·스키마·미등록 핸들러·핸들러 예외·연결 끊김·자격 만료는 FAILED로 끝난다.
+잘못된 메시지·스키마·미등록 핸들러·핸들러 예외·연결 끊김·인증 완료 전 자격 만료는 FAILED로 끝난다.
 `snapshot().diagnostic`은 고정 진단만 제공하고 peer payload나 자격을 로그에 노출하지 않는다.
 `ReplyHandlers`는 최대 2개 응답(ACK + 결과)을 반환할 수 있다. 전체 batch를 검증한 후 송신한다.
 제품은 ALIVE, STATE_RESULT, TERMINATE_RESULT 및 미지원 요청에 대한 ERROR를 보낸다.
@@ -70,7 +70,23 @@ WSS 어댑터는 기존 `telemetry::WebSocket`/WinHTTP 구현을 별도 인스�
 replay 기록은 연결당 기본 65,536개 메시지(HELLO_ACK 포함)까지이며 초과 입력은 연결을 종료한다.
 action_id는 기록 메모리 제한을 위해 256바이트까지 허용한다. 이는 구현의 로컬 한도이며 동결된 wire 스키마가 아니다.
 수신 취소는 20ms poll과 기존 WinHTTP 취소 경로를 사용한다. 자동 재연결·요청 재전달은 없다.
-특히 bootstrap token을 자동 재사용하지 않는다. 자격 만료는 보수적으로 연결을 종료한다.
+특히 bootstrap token을 자동 재사용하지 않는다. 자격 만료는 접속 전·직후와
+HELLO_ACK 검증 완료 전까지 검사한다. 인증 완료 후에는 bootstrap token 만료만으로
+기존 연결을 종료하지 않는다. Runtime의 heartbeat lease와 연결/세션 검증은 계속 적용한다.
+
+### Issue #19 검증 (2026-09-29)
+
+MSYS2 UCRT64 GCC 16.2.0, CMake/Ninja Release 제품 빌드와 로컬 CTest 12개를 통과했다.
+Control 수신부는 39개 시나리오를 통과했다. 추가한 6개는 접속 전 만료, 접속 중 만료,
+HELLO_ACK 수신 중 만료, 인증 후 수신 중 만료, 인증 후 idle 중 만료,
+인증 후 만료 상태에서도 잘못된 connection ID 거부를 확인한다.
+동일 테스트가 수정 전 develop 코드에서 실패하고 수정 후 통과함을 확인했다.
+기존 gui_runtime/gui_session 테스트의 lease 만료 및 연결 단절 시 입력 차단도 통과했다.
+테스트 소스는 저장소 기존 방침대로 Git에서 제외된 로컬 `tests/`에 보관한다.
+
+실제 Windows Sandbox에서 5분을 넘기는 장시간 연결과 새 EXE 배포는 이번 검증에 포함하지 않았다.
+배포 검증 시 새 bootstrap으로 연결하고 6분 이상 HEARTBEAT/ALIVE와 connected 상태를 확인한 뒤,
+OBSERVE·STATE_REQUEST 및 TERMINATE 결과를 확인한다. 기존 만료 bootstrap을 재사용하지 않는다.
 
 ## 제품 실행과 후속 범위
 
