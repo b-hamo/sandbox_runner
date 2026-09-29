@@ -37,7 +37,9 @@ Json::Value bootstrap(const std::wstring& path) {
     require(ok && n<=65536,"Cannot read Host bootstrap or size exceeded");
     auto root=scrp::parse_json(std::string(buffer.data(),n),65536);
     const std::vector<std::string> fields={"bootstrap_version","session_id","runtime_id","generation","host","port","path","token","token_expires_at","host_certificate_pem","observation_upload"};
-    require(root.isObject() && root.size()==fields.size(),"Unsupported Host bootstrap fields");
+    require(root.isObject(),"Unsupported Host bootstrap fields");
+    const auto expected_fields=fields.size()+(root.isMember("host_certificate_sha256") ? 1u : 0u);
+    require(root.size()==expected_fields,"Unsupported Host bootstrap fields");
     for(const auto& f:fields)require(root.isMember(f),"Missing Host bootstrap field");
     require(root["bootstrap_version"]=="1.0" && root["path"]=="/scrp/v1/control", "Unsupported Host bootstrap version/path");
     return root;
@@ -99,6 +101,16 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     require(CryptStringToBinaryA(pem.c_str(),static_cast<DWORD>(pem.size()),CRYPT_STRING_BASE64HEADER,der.data(),&size,nullptr,nullptr),"Invalid bootstrap certificate");
     ctx.connection.trust.leaf_sha256=control::util::sha256_hex(der.data(),size);
     require(ctx.connection.trust.leaf_sha256.size()==64,"Cannot hash bootstrap certificate");
+    // Older Host bootstrap v1.0 omits this field. If supplied, cross-check
+    // against the certificate itself; never replace the locally derived pin.
+    if(b.isMember("host_certificate_sha256")) {
+        const auto& supplied=b["host_certificate_sha256"];
+        require(supplied.isString(),"Invalid bootstrap certificate SHA-256");
+        const auto fingerprint=supplied.asString();
+        require(fingerprint.size()==64 && fingerprint.find_first_not_of("0123456789abcdef")==std::string::npos,
+                "Invalid bootstrap certificate SHA-256");
+        require(fingerprint==ctx.connection.trust.leaf_sha256,"Bootstrap certificate SHA-256 mismatch");
+    }
     auto token=control::util::utf8_to_wide(text(b["token"]));require(bool(token),"Invalid bootstrap token");
     telemetry::ChannelCredential credential{L"Authorization",L"Bearer "+*token,utc(text(b["token_expires_at"]))};
     telemetry::validate_credential(credential);telemetry::validate_connection_settings(ctx.connection);
