@@ -1,5 +1,9 @@
 # ARTIFACT_CANDIDATE 전송 계약 — artifact-candidate-v1
 
+Issue #23의 [artifact-export-v1](artifact-export-contract.md)은 이 후보 payload/ACK를 그대로 재사용하고
+후보 조회·승인된 요청·Runner HTTPS 업로드를 제품에 연결한다. 아래 제외 범위는 기존 #11의 범위이며
+현재 제품 전체의 미구현 목록이 아니다. Host 채택과 최종 반출은 별도 구현·검증 대상이다.
+
 ## 상태와 범위
 
 Issue #11에서 정의한 **Runner 구현·검증용 계약안**이다. Host 합의가 완료된 기존 SCRP 규약으로

@@ -117,7 +117,7 @@ void Receiver::run(const std::atomic<bool>& stop) {
             }
             if (!connection.empty() && hooks_.poll) {
                 const auto ready = hooks_.poll();
-                require(ready.size() <= 34);
+                require(ready.size() <= 35); // GUI results, one Artifact and TERMINATE
                 bool finished = false;
                 for (const auto& result : ready) {
                     auto found = pending.find(result.correlation_id);
@@ -127,7 +127,7 @@ void Receiver::run(const std::atomic<bool>& stop) {
                     pending.erase(found);
                     finished = finished || result.finish;
                 }
-                if (finished) break;
+                if (finished) { socket->shutdown(stop); break; }
             }
             std::string incoming;
             if (!socket->receive(incoming, std::chrono::milliseconds(20), stop)) continue;
@@ -170,15 +170,25 @@ void Receiver::run(const std::atomic<bool>& stop) {
                 if (stop) break;
                 diagnostic = "Control request handler failed";
                 // Reserve before handoff: no input can execute after queue exhaustion.
-                if (request.type == "ACTION_REQUEST" || request.type == "OBSERVE")
-                    require(pending.size() < 33); // reserve TERMINATE, never block management traffic
+                if (request.type == "ACTION_REQUEST" || request.type == "OBSERVE") {
+                    const auto gui_pending=std::count_if(pending.begin(),pending.end(),[](const auto& item) {
+                        return item.second.type=="ACTION_REQUEST" || item.second.type=="OBSERVE";
+                    });
+                    require(gui_pending < 33); // separate Artifact and TERMINATE slots
+                }
                 auto replies = handler->second(request);
                 if (replies.deferred) {
                     require(bool(hooks_.poll) && !replies.finish);
-                    require(request.type == "ACTION_REQUEST" || request.type == "OBSERVE" || request.type == "TERMINATE");
+                    require(request.type == "ACTION_REQUEST" || request.type == "OBSERVE" ||
+                            request.type == "ARTIFACT_REQUEST" || request.type == "TERMINATE");
                     if (request.type == "ACTION_REQUEST")
                         require(replies.messages.size() == 1 && replies.messages[0].type == "ACK" && replies.messages[0].status == "ACCEPTED");
                     else require(replies.messages.empty());
+                    require(pending.size() < 35);
+                    if (request.type == "ARTIFACT_REQUEST")
+                        require(std::none_of(pending.begin(),pending.end(),[](const auto& item) {
+                            return item.second.type=="ARTIFACT_REQUEST";
+                        })); // busy requests must finish synchronously
                     pending.emplace(request.message_id, request);
                 }
                 require(replies.messages.size() <= 2);
@@ -201,7 +211,7 @@ void Receiver::run(const std::atomic<bool>& stop) {
                     ++snapshot_.dispatched;
                 }
                 diagnostic = "Control request rejected or connection lost";
-                if (replies.finish) break;
+                if (replies.finish) { socket->shutdown(stop); break; }
             }
             ++sequence;
         }

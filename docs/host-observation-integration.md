@@ -1,5 +1,9 @@
 # Host observation 연결 (#17)
 
+Issue #23은 기존 관찰/GUI 계약을 유지하면서 bootstrap의 명시적 `artifact-export-v1` 선택으로
+별도 후보·Telemetry·Artifact HTTPS 경로를 추가한다. [설정과 Host 추가 구현](artifact-export-contract.md)을 따른다.
+아래 실제 Sandbox 검증은 기존 GUI/관찰에 대한 이력이며 새 Artifact 전체 반출의 검증을 뜻하지 않는다.
+
 ## 적용 기준
 
 Host 저장소 `b-hamo/host_control`, `feat/19-observation-upload`의 `6055cc6`을 수정하지 않고 연결한다.

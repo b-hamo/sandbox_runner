@@ -24,6 +24,7 @@ public:
     ::control::Hooks hooks();
     std::size_t block() noexcept;
     void stop(); // owner only, after Receiver has stopped
+    bool active() const { return runtime_.snapshot().lease_valid && !cancelled_; }
     const runtime::WorkspacePaths& workspace() const { return runtime_.workspace(); }
     static control::ActionRequest translate(const scrp::Envelope&);
 private:

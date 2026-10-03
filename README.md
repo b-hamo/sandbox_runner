@@ -1,219 +1,53 @@
 # sandbox_runner
 
-Windows Sandbox 내부의 세션 Output 변경을 감시하는 단일 C++ Runner다.
-Sandbox 하나를 세션 하나로 사용한다. `--session-context <파일>`로 외부 Context를 주입하고
-Telemetry READY 이후 `C:\RunnerWorkspace\Output`을 준비한다. 하위 폴더까지 감시하며
-정상 종료 요청 또는 감시 오류가 발생할 때까지 실행된다. Context 없이 실행하면 명시적으로 실패한다.
+Windows Sandbox 내부에서 GUI 관찰·입력, 세션 Output 감시, Artifact 후보 보고 및 Host가 승인한 HTTPS 파일 전송을 수행하는 단일 C++ Runner다. Host의 MCP/Broker·승인·수신 검사·최종 반출과 연결하며 Runner는 파일 안전성을 판정하지 않는다.
 
-## 현재 범위
+## 실행 모드
 
-Control 수신·관리 응답은 `sandbox_runner.exe --control-context <파일>`로 별도 실행한다.
-Host Sender 연동 결과와 설정은 [Host 연동 문서](docs/host-sender-integration.md)를 따른다.
-이 모드는 HELLO, 생존·상태·종료 요청을 처리하며 GUI 실행·업로드는 미지원 오류를 반환한다.
-기존 Artifact/Telemetry 모드와 동시에 선택하지 않는다.
-
-- `src/main.cpp`: 공통 실행 진입점, Context·`--output` 입력, 로그 및 Ctrl+C/Ctrl+Break 종료.
-- `src/session_context.*`, `src/runner_lifecycle.*`: 기존 Context 재사용·외부 입력 검증·Telemetry READY 확인·종료 연결.
-- `src/candidate_telemetry.*`: 외부 CandidateEventContract로 후보·무효화를 변환해 기존 TelemetryClient에 전달.
-- `src/artifact_candidate_adapter.*`, `src/protocol/scrp/artifact_candidate.*`: 명시적으로 선택한 후보 payload·저장 ACK 계약안과 제품 adapter.
-- `src/runner_paths.h`: 세션의 고정 Output 경로. C++ 구성 요소는 이 상수를 공유한다.
-- `src/artifact/output_watcher.{h,cpp}`: Windows `ReadDirectoryChangesW` 기반 감시.
-- `src/artifact/candidate_detector.{h,cpp}`: 기존 이벤트 큐를 재사용한 파일별 debounce·안정화·세대·후보 상태 관리.
-- `src/artifact/file_stability.{h,cpp}`: 기존 경로 검증과 파일 메타데이터 비교를 분리한 안정화 관찰.
-- `src/protocol/scrp/`, `src/transport/telemetry/`: Artifact와 독립적인 SCRP Telemetry WSS·ACK·재전송 계층. [API·검증](docs/telemetry.md).
-- `CMakeLists.txt`: 제품 Runner만 빌드한다.
-
-### 팀원이 코드를 연결할 위치
-
-| 구분 | 위치 | 역할·배포 여부 |
-| --- | --- | --- |
-| Runner 진입점 | `src/main.cpp` | Control과 Artifact를 연결할 공통 진입점 |
-| 세션 경로 | `src/runner_paths.h` | Sandbox 내부 고정 Output 경로의 기준 |
-| Artifact 구현 | `src/artifact/` | Runner에 포함되는 감시 코드 |
-| 로컬 검증 코드 | `tests/` | Git 제외. 저장소 빌드·제품 배포에 포함하지 않음 |
-| 빌드 산출물 | `build/` | EXE와 CMake 캐시. Git 제외 |
-
-제품 실행 파일은 `sandbox_runner.exe` 하나다. 테스트 소스·스크립트와 테스트용 CMake는
-로컬 `tests/`에만 보관하고 Git에서 제외한다. 새 checkout은 테스트 파일 없이 제품을 빌드한다.
-
-향후 Control과 Artifact의 구현 소스를 같은 실행 타깃에 연결한다.
-[이슈 #1](https://github.com/b-hamo/sandbox_runner/issues/1)의 감시 기능에
-[이슈 #3](https://github.com/b-hamo/sandbox_runner/issues/3)의 최신 설계 변경에 따라 파일 안정화와 Artifact 후보 보고를 연결한다.
-Runner는 Defender 검사와 SHA-256/MIME/크기 검증을 수행하지 않는다. 이 검증은 Host Quarantine의 책임이다.
-GUI 제어, 업로드 및 Host의 최종 반출 승인은 포함하지 않는다.
-Context에 `"event_contract": "artifact-candidate-v1"`을 지정하면 제품 adapter가 후보 이벤트를
-전송하고 저장 ACK를 처리한다. [계약·예제·Host 합의 대기 상태](docs/artifact-candidate-contract.md)를 확인한다.
-생략 시 기존 handshake-only 동작을 유지하며 후보는 전송하지 않는다. 무효화 wire 전송은 범위 밖이다.
-Telemetry는 외부 Context로 시작하며 Control HELLO_ACK에서 Telemetry Context로의 변환은 아직 미구현이다.
-입력 파일과 테스트/Host 계약의 경계는 [Session Context 입력 절차](docs/telemetry.md)를 따른다.
-안정화 판단·후보 이벤트·제한·검증 결과는 [후보 감지 문서](docs/artifact-candidates.md)를 따른다.
-C++ 표준 버전은 팀 합의 전까지 CMake에서 고정하지 않으며 사용 중인 컴파일러 기본값을 따른다.
-
-## 감시 동작과 경계
-
-고정 경로 구조는 다음과 같다. 세션 ID별 하위 디렉터리는 만들지 않는다.
-
-```text
-C:\RunnerWorkspace\         Sandbox 내부 세션 작업 공간
-└─ Output\                  파일을 만드는 작업이 결과물을 저장할 위치
-   └─ reports\result.txt    하위 폴더도 감시 대상
+```powershell
+.\sandbox_runner.exe --host-bootstrap C:\RunnerPackage\bootstrap.json --host-address 192.168.0.3
+.\sandbox_runner.exe --control-context C:\RunnerPackage\control-context.json
+.\sandbox_runner.exe --session-context C:\RunnerPackage\telemetry-context.json
 ```
 
-`src/runner_paths.h`의 `runner::default_output_path`가 기준이다.
-기본 실행은 누락된 폴더만 생성하고 기존 파일을 지우지 않는다.
-경로 준비 시에도 기존 디렉터리와 상위 경로의 reparse point를 거부한다.
-현재 프로그램의 Output 허용 정책은 이 고정 경로이며, 별도 세션 승인 프로토콜을 새로 만들지 않는다.
-Bootstrap과 파일을 생성하는 구성 요소도 같은 경로를 사용해야 한다.
-Host에 쓰기 가능한 공유 폴더로 매핑하지 않는다.
+- `--host-bootstrap`: 기존 GUI·PNG HTTPS 업로드·세션 Output 감시. 신뢰된 bootstrap에 `control_contract: "artifact-export-v1"`와 `artifact_upload: {"port": <Host HTTPS 포트>, "path": "/scrp/v1/artifacts/"}`를 함께 지정하면 파일 반출 경로를 활성화한다. Host도 새 프로파일을 구현해야 한다.
+- `--control-context`: 기존 Control 관리 모드. GUI/Artifact 전송은 활성화하지 않는다.
+- `--session-context`: 기존 독립 Telemetry 모드. `event_contract: "artifact-candidate-v1"` 선택 시 네 필드 후보 SECURITY_EVENT를 전송한다. 개발·테스트용 `--output`은 이 모드에서 기존 절대 디렉터리에만 사용할 수 있다.
 
-`--output`은 Host 개발·테스트용 경로 재정의이며 **이미 존재하는** 절대 경로를 받는다.
-운영 Bootstrap은 이 옵션 없이 Runner를 실행한다. 이 옵션에 외부 작업 요청의 임의 경로를 연결하지 않는다.
+Host bootstrap 모드의 Output은 `C:\RunnerWorkspace\Sessions\session-<session_id>\runtime-<runtime_id>\generation-<generation>\output`이다. 독립 모드 기본값은 `C:\RunnerWorkspace\Output`이다. 모두 Guest 내부 폴더이며 Host에 쓰기 가능한 공유 Output을 만들지 않는다. 경로·기존 파일을 요청에서 임의로 재지정하지 않는다.
 
-- Output 전체 하위 트리의 생성·수정·삭제·이름 변경 전/후 이름을 보고한다. 실행 중 새로 생긴 하위 폴더도 포함한다.
-- 이벤트 이름은 Output 기준 상대 경로다. 예: `reports\result.txt`. 하위 폴더 이름이 바뀐 뒤의 변경도 새 경로로 보고한다.
-- 알림은 중복되거나 합쳐질 수 있다. 이름 변경의 이전/새 이름을 별도로 전달하며 무조건적인 쌍을 보장하지 않는다.
-- 경로 밖 파일은 감시하지 않는다. 상대 경로, `..`, UNC/장치 경로, 드라이브 루트 및 Output/상위 경로의 reparse point는 거부한다.
-- 검증한 Output과 상위 폴더 핸들을 삭제 공유 없이 유지한다. 감시 중에는 이 폴더들의 이름 변경·삭제가 제한된다.
-- 자식 링크의 이름 자체는 비신뢰 알림으로 보고할 수 있지만 링크를 따라가거나 파일을 열지 않는다.
-- 시작 전부터 존재하거나 실행 중 생성된 junction의 외부 대상 파일은 감시하지 않는다. 기존 파일 목록을 시작 시 나열하는 기능은 포함하지 않는다.
-- 오류 또는 알림 버퍼 초과 시 Win32 오류를 보고하고 비정상 종료한다. 누락을 숨기거나 자동으로 완전 복구했다고 판단하지 않는다.
-- Ctrl+C/Ctrl+Break는 대기 중 I/O를 취소하고 완료를 회수한 뒤 핸들을 정리한다. 강제 프로세스 종료나 콘솔 창 닫기는 정상 종료 경로로 보장하지 않는다.
+## Artifact 반출
 
-`artifact::watch_output(path, stop_event, on_change)`는 호출 스레드에서 대기하며 변경 콜백을 호출한다.
-`ready`는 첫 감시 요청을 등록한 뒤 전달한다. 콜백은 짧게 처리하고, 후속 모듈의 큐에 연결할 수 있다.
-호출자는 수동 리셋 종료 이벤트를 소유하며 함수가 반환할 때까지 유지한다.
-Control 내부 구현에 의존하지 않으며 자체 작업 스레드를 만들지 않는다.
-Runner는 이 감시 콜백에서 `CandidateDetector::submit()`만 호출한다. 별도 작업 스레드가
-파일 안정화를 관찰하고 `ARTIFACT_CANDIDATE` 이벤트와 변경·무효화 상태를 출력한다.
-반환값은 정상 중지 시 `ERROR_SUCCESS`, 실패 시 Win32 오류 코드다.
-감시 실패 시 후보 큐와 이전 결과도 무효화한다. 정상 종료 시 작업 스레드의 대기를 깨우고 합류한다.
-파일 접근·전송을 추가할 때에는 세션과 경로를 다시 검증해야 한다. 알림은 파일 완성이나 안전 판정이 아니다.
+파일 생성 → 안정화 → `SECURITY_EVENT(ARTIFACT_CANDIDATE)` → Host 후보 등록/승인 → `ARTIFACT_REQUEST` → 현재 후보·핸들 재검증 → HTTPS PUT → `ARTIFACT_RESULT` 순서다. 후보에는 event_id·관찰 시각·상대 경로만 보고하며 파일 바이트·해시는 넣지 않는다.
 
-## Host에서 빌드 및 실행
+Control과 Telemetry는 별도 WSS다. 검증한 HELLO_ACK의 별도 자격으로 Telemetry를 시작하고 CHANNEL_ACK 후 후보 생산을 연결한다. GUI 준비용 Output 알림 감시는 이전처럼 HELLO 전에 시작한다. 기존 파일이나 후보 보고 준비 전 변경을 초기 스캔으로 보충하지 않으므로 Host는 채널과 기존 Startup Verification이 준비된 후 작업을 시작해야 한다.
 
-MSYS2 **UCRT64** 터미널에서 저장소 루트로 이동한다.
-UCRT64용 GCC, CMake, Ninja가 설치되어 있어야 한다.
-Telemetry의 JSON 처리를 위해 UCRT64 JsonCpp도 필요하다 (`pacman -S mingw-w64-ucrt-x86_64-jsoncpp`).
-JsonCpp는 정적으로 연결하므로 Sandbox에 별도 JsonCpp DLL을 설치하지 않는다.
-`command -v cmake ninja g++` 결과가 모두 `/ucrt64/bin/` 아래인지 확인한다.
-다른 컴파일러로 만든 `build/` 캐시가 있다면 해당 폴더를 먼저 별도 위치에 백업한다.
+파일·경로 체인 핸들을 보유하고 reparse/ADS/하드링크·변경·삭제·크기 상한을 재검증한다. 단일 worker가 고정 HTTPS 경로로 64 KiB 버퍼를 사용해 스트리밍하며 Control heartbeat를 막지 않는다. 별도 토큰·기한·일회성 ID·TLS 검증을 적용하고 빈 201만 수신 성공으로 처리한다. 종료·채널 장애 시 전송을 취소하고 worker/핸들을 정리한다.
+
+Host가 비공개 수신 파일의 크기·SHA-256을 계산하고 HTTP 완료와 Runner 결과를 교차 확인해야 한다. 형식·백신 검사와 승인 후 동일 바이트만 최종 결과 폴더에 반출한다. Runner 업로드 성공은 검사나 EXPORTED 상태가 아니다.
+
+[Host 구현 계약·Schema·체크리스트](docs/artifact-export-contract.md), [Runner 구현·검증·제한](docs/artifact-export-implementation.md), [현재 구조](docs/project-structure.md)를 따른다.
+
+## Host 빌드와 배포
+
+Windows x64 **MSYS2 UCRT64** GCC/CMake/Ninja와 JsonCpp를 같은 환경에서 사용한다. 현재 GUI 기반의 C++17 요구 및 JsonCpp 정적 연결을 유지한다. 도구 버전은 팀에서 새로 동결하지 않는다.
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ./build/sandbox_runner.exe --help
-echo $?
 ```
 
-도움말에 기본 경로와 재귀 감시 동작이 표시되며 종료 코드는 `0`이다.
-실제 실행에는 유효한 Context와 연결 가능한 TLS/WSS peer가 필요하다. Host 검증에는 아래 `--output` 예제를 사용한다.
-MSYS2 터미널 밖의 PowerShell에서도 저장소 루트에서 확인한다.
+빌드는 Host에서 수행한다. Sandbox에는 EXE 및 필요한 실행 결과만 배치하며 CMake/GCC/Ninja 설치를 전제로 하지 않는다. Windows TLS chain·hostname과 bootstrap 인증서 pin을 모두 확인한다. 신뢰 인증서 배치는 외부 Runtime 책임이며 평문 fallback이나 인증서 검증 해제는 없다.
 
-```powershell
-& .\build\sandbox_runner.exe --help
-$LASTEXITCODE
-```
+제품은 Windows 기본 DLL만 사용하도록 정적 연결한다. `build/`와 테스트 소스·스크립트·테스트용 CMake가 있는 `tests/`는 Git 제외이며 새 checkout 제품 빌드는 이 파일들을 참조하지 않는다.
 
-실제 감시는 PowerShell 창 두 개에서 재현한다. 첫 창에서:
+## 관련 문서
 
-```powershell
-$outputPath = Join-Path $env:TEMP 'runner-session-example\Output'
-New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-& .\build\sandbox_runner.exe --session-context C:\session\context.json --output $outputPath
-```
+- [Output 안정화·후보 감지](docs/artifact-candidates.md)
+- [기존 후보 payload·EVENT_ACK](docs/artifact-candidate-contract.md)
+- [Telemetry API·독립 Context](docs/telemetry.md)
+- [기존 GUI 통합](docs/gui-integration.md)
+- [기존 Host 관찰 연결·Sandbox 검증 이력](docs/host-observation-integration.md)
 
-`WATCHING` 출력 후 두 번째 창에서:
-
-```powershell
-$outputPath = Join-Path $env:TEMP 'runner-session-example\Output'
-Set-Content -LiteralPath (Join-Path $outputPath 'test.txt') -Value 'first'
-Add-Content -LiteralPath (Join-Path $outputPath 'test.txt') -Value 'second'
-Rename-Item -LiteralPath (Join-Path $outputPath 'test.txt') -NewName 'renamed.txt'
-New-Item -ItemType Directory -Path (Join-Path $outputPath 'reports\daily') -Force | Out-Null
-Set-Content -LiteralPath (Join-Path $outputPath 'reports\daily\result.txt') -Value 'nested'
-Add-Content -LiteralPath (Join-Path $outputPath 'reports\daily\result.txt') -Value 'changed'
-Rename-Item -LiteralPath (Join-Path $outputPath 'reports\daily\result.txt') -NewName 'final.txt'
-Set-Content -LiteralPath (Join-Path (Split-Path $outputPath) 'outside.txt') -Value 'outside'
-```
-
-첫 창에서 `CREATED`, `MODIFIED`, `RENAMED_OLD`, `RENAMED_NEW`를 확인한다.
-`reports\daily\result.txt` 및 `reports\daily\final.txt`의 이벤트도 확인한다.
-`outside.txt`는 보고되지 않아야 한다. Ctrl+C 후 `Watch stopped`와 `$LASTEXITCODE`의 `0`을 확인한다.
-로그 이름은 UTF-8이며 제어 문자는 이스케이프한다. 로그는 SCRP 메시지가 아니다.
-
-필요한 DLL은 UCRT64의 `objdump -p build/sandbox_runner.exe`에서 `DLL Name` 항목을 확인한다.
-현재 MinGW 빌드에서는 GCC/C++/스레드 런타임을 정적으로 연결해 Host의 DLL 검색 경로에 의존하지 않도록 한다.
-Windows 기본 DLL 외의 런타임 DLL이 필요하면 사용한 UCRT64 도구 체인의 DLL을 EXE와 함께 배치한다.
-
-## 검증 정책
-
-자동 테스트 코드는 로컬에만 보관한다. 공유 CMake에는 테스트 타깃·옵션이 없으며,
-기존 `RUNNER_BUILD_TESTS`, `RUNNER_TEST_LOCAL_TLS` 옵션은 제품 빌드에서 사용하지 않는다.
-이전에 수행한 검증 결과는 아래에 이력으로 남긴다. 새 checkout에서 수동 확인은 위 실행 절차를 따른다.
-
-Junction 거부는 PowerShell에서 별도로 재현할 수 있다:
-
-```powershell
-$checkRoot = Join-Path $env:TEMP ('runner-junction-' + [guid]::NewGuid().ToString('N'))
-$target = Join-Path $checkRoot 'target'
-$alias = Join-Path $checkRoot 'alias'
-New-Item -ItemType Directory -Path (Join-Path $target 'nested') -Force | Out-Null
-New-Item -ItemType Junction -Path $alias -Target $target | Out-Null
-& .\build\sandbox_runner.exe --session-context C:\session\context.json --output $alias
-$LASTEXITCODE # 1, Win32 error 5
-& .\build\sandbox_runner.exe --session-context C:\session\context.json --output (Join-Path $alias 'nested')
-$LASTEXITCODE # 1, Win32 error 5
-```
-
-## 실제 Windows Sandbox 확인
-
-Host에서 빌드한 EXE와 필요한 런타임 DLL만 Sandbox 내부의 테스트 폴더로 복사해 실행한다.
-Sandbox에 CMake, Ninja 또는 GCC를 설치하지 않는다.
-Sandbox 내부에서 신뢰 앵커와 유효한 Context를 준비하고 `--session-context <파일>`로 실행한다.
-`--output`을 생략하여 Telemetry READY 이후 고정 경로 준비와 상주를 확인한다.
-위 PowerShell 파일 변경 절차의 `$outputPath`를 `C:\RunnerWorkspace\Output`으로 바꾸어
-파일 변경과 Ctrl+C 종료를 확인한다.
-Host 폴더를 매핑하여 전달한다면 읽기 전용으로 제한하며, Host에 쓰기 가능한 Output 공유 폴더를 만들지 않는다.
-
-Sandbox 자동 시작은 Runtime 담당의 `.wsb` `LogonCommand`/Bootstrap에서 Context를 전달하도록 연결한다.
-이 저장소는 Sandbox를 생성·종료하는 Runtime 구현을 추가하지 않는다.
-Artifact/Telemetry 모드는 별도로 실행한다. `--host-bootstrap` 모드는 세션 Output 감시와 Control GUI 루프를 함께 실행한다.
-관리되는 종료는 Runner 중지 요청 → 감시 I/O 정리 완료 → Sandbox 종료 순서로 연결해야 한다.
-Sandbox 강제 종료 시의 정상 정리 완료는 보장하지 않는다.
-
-현재 개발 환경에서는 UCRT64 Release 빌드와 Host Windows 통합 테스트를 통과했다.
-MSYS2/MinGW를 PATH에서 뺀 PowerShell에서도 EXE 및 통합 테스트를 실행했다.
-Junction 자체와 상위 Junction 경로 거부를 확인했다. 심볼릭 링크 테스트는 권한 부족(1314)으로 건너뛰었다.
-기존 Artifact 구현은 실제 Windows Sandbox에서 후보 감지·감시 테스트와 Runner 후보 로그·Ctrl+C 종료를 확인했다.
-Issue #7의 Telemetry lifecycle 통합은 Host Windows에서 검증했으며 실제 Sandbox·팀 Host 연동은 미검증이다.
-OS 감시 버퍼 강제 초과 및 디스크 오류 재현은 아직 검증하지 않았다. 내부 큐 초과는 테스트했다.
-
-## 후속 합의
-
-- C++ 표준, GCC 및 외부 라이브러리 버전.
-- Runtime Bootstrap 및 파일 생성 구성 요소에서 확정된 고정 경로를 사용하는 연결.
-- Control과 Artifact의 시작·종료를 단일 진입점에서 연결하는 방식.
-- 알림 누락 시 재동기화 정책.
-
-## GUI 실행 모듈 연동 (#14)
-
-제공된 Windows 캡처/클릭/스크롤/키보드 모듈을 단일 Runner에 연결했다.
-`GuiSession`은 Host 승인·capability·lease를 확인하고 ACK 선송신, 비동기 결과,
-상태 조회 및 종료/연결 단절 차단을 처리한다.
-기본 `--control-context` CLI는 여전히 관리 모드이며, 실제 GUI 활성화에는 신뢰된
-Host 시작 승인 및 scoped HTTPS uploader의 내부 주입이 필요하다.
-구현/검증/남은 Host 계약과 호출 절차는 [GUI 연동 문서](docs/gui-integration.md)를 따른다.
-
-Issue #17에서 Host `feat/19-observation-upload`의 `6055cc6` bootstrap을 받는 실행 경로를 추가했다.
-Sandbox 안에서 인증서를 신뢰하도록 launcher가 준비한 뒤 다음과 같이 실행한다.
-
-```powershell
-.\sandbox_runner.exe --host-bootstrap C:\RunnerPackage\bootstrap.json --host-address 192.168.0.3
-```
-
-주소는 실제 Host IPv4로 바꾼다. bootstrap에 주소가 지정되어 있으면 일치해야 한다.
-인증서의 SAN도 해당 주소와 일치해야 하며 Windows 인증서 검증을 해제하지 않는다.
-세션 Output 감시를 시작한 뒤 Control에 연결하고, Host 요청에 따라 캡처·PNG 업로드·GUI 명령을 처리한다.
-실제 Codex → Host MCP → Windows Sandbox Runner의 시작 검증·PNG 반환·클릭·한글 입력·정상 종료를 확인했다.
-[현재 통신 계약·실행 경계](docs/host-observation-integration.md),
-[검증 이력](docs/gui-product-validation.md)을 참고한다.
+실제 Windows Sandbox에서 독립 peer로 Runner Artifact 반출·종료를 두 번 검증했다. [Sandbox 검증 결과·재현](docs/artifact-sandbox-validation.md)을 참고한다. 실제 Host/MCP/Scanner 전체 반출은 Host의 새 계약 구현 후 검증한다.

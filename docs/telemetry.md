@@ -5,7 +5,10 @@ Issue #5의 일반 `SECURITY_EVENT` 전송 기반을 Issue #7에서 Runner 시�
 Issue #9의 `CandidateTelemetry`가 외부 후보 계약을 통해 기존 enqueue에 연결한다.
 Issue #11의 `ArtifactCandidateAdapter`는 명시적으로 선택한 artifact-candidate-v1 계약안으로
 제품 실행의 후보 전송·저장 ACK를 활성화한다. [계약·예제·합의 상태](artifact-candidate-contract.md)를 따른다.
-업로드·Control HELLO_ACK에서 Telemetry Context로의 변환은 미구현이며 기존 Artifact 모듈 책임은 유지한다.
+이 문서의 Context·재연결 정책은 기존 독립 모드를 설명한다. Issue #23은 `--host-bootstrap`의
+명시적 `artifact-export-v1`에서 HELLO_ACK 자격 → Telemetry 및 파일 업로드를 연결한다.
+통합 모드는 CHANNEL_ACK 후 후보를 생산하고 채널 장애 시 반출을 중단한다.
+[제품 연결·검증](artifact-export-implementation.md)을 따른다.
 
 ## Runner Session Context 입력과 lifecycle
 
@@ -103,7 +106,8 @@ client.stop(); // I/O 취소 및 join; 여러 번 호출 가능
 
 Client는 한 번 시작한다. `start/stop`은 직렬화되고 enqueue·snapshot은 동시 호출 가능하다.
 세션/generation 변경은 새 Client로 처리한다. 이전 Pending을 새 Runtime으로 자동 이전하지 않는다.
-제품 생성·시작·종료는 위 Runner lifecycle에 연결되어 있으며 실제 Control 입력 변환만 후속 작업이다.
+독립 모드의 생성·시작·종료는 위 Runner lifecycle을 따른다. 새 Host bootstrap 모드의
+Control 입력 변환은 `HostArtifactChannels`에 구현되어 있다.
 
 ## Envelope와 ACK
 

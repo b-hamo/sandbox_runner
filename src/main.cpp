@@ -75,7 +75,7 @@ int wmain(int argc, wchar_t* argv[]) {
                    << L" (created if missing, watched recursively until stopped)\n"
                    << L"--output: use an existing directory for development/testing\n"
                    << L"--control-context: management mode (no GUI input/capture)\n"
-                   << L"--host-bootstrap: Host 6055cc6 GUI profile with session Output monitoring\n"
+                   << L"--host-bootstrap: GUI + Output monitoring; explicit artifact-export-v1 enables file transfer\n"
                    << L"--session-context: explicit local injection; see docs/telemetry.md\n";
         return 0;
     }

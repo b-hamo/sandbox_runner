@@ -1,6 +1,7 @@
 #pragma once
 
 #include "output_watcher.h"
+#include "file_stability.h"
 #include <chrono>
 #include <memory>
 
@@ -12,6 +13,8 @@ struct CandidateStatus {
     CandidateState state = CandidateState::pending;
     DWORD error = ERROR_SUCCESS;
     std::string detail;
+    FileObservation observation{};
+    bool has_observation = false; // Valid only for the current candidate generation.
 };
 struct CandidateOptions {
     std::chrono::milliseconds debounce{300};

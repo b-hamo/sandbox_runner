@@ -70,6 +70,7 @@ struct CandidateDetector::Impl {
         entry.status.generation = ++revision;
         entry.sampled = false;
         entry.status.state = CandidateState::unavailable;
+        entry.status.has_observation = false;
         entry.status.error = error;
         entry.status.detail = reason;
         notices.push_back(entry.status);
@@ -101,6 +102,7 @@ struct CandidateDetector::Impl {
                 entry.sampled = false;
                 entry.status.generation = ++revision;
                 entry.status.state = CandidateState::pending;
+                entry.status.has_observation = false;
                 entry.status.error = ERROR_SUCCESS;
                 entry.status.detail = "waiting for last-change debounce";
                 entry.due = std::min(Clock::now() + options.debounce, entry.deadline);
@@ -165,6 +167,8 @@ struct CandidateDetector::Impl {
                         unavailable(entry, error, "not an accessible in-scope regular file", notices);
                     } else if (!error && entry.sampled && same_observation(entry.previous, observation)) {
                         entry.status.state = CandidateState::candidate;
+                        entry.status.observation = observation;
+                        entry.status.has_observation = true;
                         entry.status.error = ERROR_SUCCESS;
                         entry.status.detail = "stable observations; candidate only, Host Quarantine verification required";
                         notices.push_back(entry.status);
@@ -173,6 +177,7 @@ struct CandidateDetector::Impl {
                         entry.previous = observation;
                         entry.due = std::min(Clock::now() + options.debounce, entry.deadline);
                         entry.status.state = CandidateState::stabilizing;
+                        entry.status.has_observation = false;
                         entry.status.error = error;
                         entry.status.detail = error ? "writer still active; retrying" : "waiting for matching file observation";
                         notices.push_back(entry.status);
@@ -218,6 +223,7 @@ bool CandidateDetector::get_status(const std::wstring& path, CandidateStatus& re
     // Conservatively suppress completed results while any newer notifications await processing.
     if (!impl_->healthy || impl_->stopping || !impl_->inbox.empty()) {
         result.state = CandidateState::unavailable;
+        result.has_observation = false;
         result.detail = "new events, stop or degraded watch; cached result is not current";
     }
     return true;
