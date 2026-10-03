@@ -84,16 +84,18 @@ Output은 Guest 내부 경로다. Host에 쓰기 가능한 Output 공유 매핑�
 8. 변경·삭제·감시 오류는 이전 후보를 무효화한다. Telemetry 장애/유실·GUI lease 만료는 신규 반출을 막고 활성 I/O를 취소하며 자동 재활성화하지 않는다.
 9. TERMINATE에서는 즉시 새 요청을 차단한다. watcher sink 분리 → 후보 worker join → Artifact worker join → Telemetry stop/join 후 결과를 drain하고 GUI 종료 결과를 보낸다. Control 단절에서는 같은 자원을 정리하며 이전 결과를 새 연결에 재생하지 않는다.
 
+정상 최종 결과 이후 WSS는 전체 1초 안에서 송신 종료·상대 close 수신·close 완료를 기다리고 핸들을 정리한다. 실제 Sandbox에서 송신 종료만 기다릴 때 재현된 최종 응답 유실을 보완했다. 종료 중 받은 메시지는 새 작업으로 분배하지 않는다.
+
 후보/사용 ID는 각각 최대 4096개이며 업로드 1개·완료 슬롯 1개만 둔다. 파일 바이트 전체나 임시 복사본은 Runner에 보관하지 않는다. HTTPS 201은 Host 수신 완료이며 최종 반출 성공과 별개다. [전체 제한·오류 코드](artifact-export-contract.md)를 따른다.
 
 ## Host 연결과 남은 작업
 
 Host는 Telemetry 인증/라우터/ACK, event_id 중복 등록·artifact_id 매핑, artifact_list/export backend·승인, 한정된 업로드 grant, 전용 HTTPS 수신·수신 크기/SHA-256·결과 교차 확인, 형식/백신 검사 및 동일 바이트 최종 EXPORTED를 구현해야 한다. GUI Startup Verification과 MCP 기존 REQUIRE_APPROVAL을 그대로 연결한다. Host 구현 체크리스트는 [반출 계약 11절](artifact-export-contract.md#11-mcp-담당-구현-체크리스트)에 있다.
 
-현재 제품 Control은 자동 재연결하지 않는다. Telemetry 독립 모드의 재연결과 새 통합 프로파일의 장애 시 중단 정책을 구분한다. 실제 Host/MCP/Windows Sandbox 전체 반출, Scanner 정책·Host 채택 revision은 후속 통합 검증 대상이다.
+현재 제품 Control은 자동 재연결하지 않는다. Telemetry 독립 모드의 재연결과 새 통합 프로파일의 장애 시 중단 정책을 구분한다. 실제 Sandbox의 Runner 반출은 독립 peer로 검증했다. 실제 Host/MCP 전체 반출, Scanner 정책·Host 채택 revision은 후속 통합 검증 대상이다.
 
 ## 빌드·검증 문서
 
 Host의 동일 MSYS2 UCRT64 환경에서 CMake/Ninja로 Windows x64 EXE를 빌드한다. 기존 GUI 기반의 C++17 요구와 JsonCpp 정적 연결을 유지한다. 도구/라이브러리 버전은 검증 환경이며 팀 동결값으로 새로 확정하지 않는다. Sandbox에는 실행 결과만 배치한다.
 
-[README](../README.md), [Telemetry](telemetry.md), [후보 감지](artifact-candidates.md), [GUI 연동](gui-integration.md), [기존 Host 관찰 검증](host-observation-integration.md), [Artifact 구현·검증](artifact-export-implementation.md)을 따른다.
+[README](../README.md), [Telemetry](telemetry.md), [후보 감지](artifact-candidates.md), [GUI 연동](gui-integration.md), [기존 Host 관찰 검증](host-observation-integration.md), [Artifact 구현·검증](artifact-export-implementation.md), [실제 Sandbox Artifact 검증](artifact-sandbox-validation.md)을 따른다.

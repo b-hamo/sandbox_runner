@@ -198,11 +198,49 @@ public:
     void shutdown(const std::atomic<bool>& stop) noexcept override {
         if (!socket_ || stop) return;
         try {
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(1000);
+            const auto remaining=[&] {
+                const auto left=deadline-std::chrono::steady_clock::now();
+                return std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::max(left,std::chrono::steady_clock::duration::zero()));
+            };
             const auto result=WinHttpWebSocketShutdown(socket_->value,
                 WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,nullptr,0);
-            if (result==NO_ERROR || result==ERROR_IO_PENDING)
-                socket_->wait(WINHTTP_CALLBACK_STATUS_SHUTDOWN_COMPLETE,
-                    std::chrono::milliseconds(500),stop);
+            check(result==NO_ERROR || result==ERROR_IO_PENDING,"WebSocket shutdown failed");
+            if (!socket_->wait(WINHTTP_CALLBACK_STATUS_SHUTDOWN_COMPLETE,remaining(),stop)) return;
+            // Shutdown closes only the send channel. Preserve the outstanding
+            // receive and wait for the peer's close frame before cancelling the
+            // handle: immediate cancellation can discard the last result on a
+            // VM/NAT path even after WRITE_COMPLETE. This is transport closure,
+            // not an application acknowledgement or permission to replay data.
+            while (!stop && std::chrono::steady_clock::now()<deadline) {
+                if (!reading_) {
+                    const auto received=WinHttpWebSocketReceive(socket_->value,read_buffer_.data(),
+                        static_cast<DWORD>(read_buffer_.size()),nullptr,nullptr);
+                    check(received==NO_ERROR || received==ERROR_IO_PENDING,"WebSocket closing receive failed");
+                    reading_=true;
+                }
+                if (!socket_->wait(WINHTTP_CALLBACK_STATUS_READ_COMPLETE,remaining(),stop)) return;
+                reading_=false;
+                WINHTTP_WEB_SOCKET_STATUS read;
+                { std::lock_guard<std::mutex> lock(socket_->mutex); read=socket_->read; }
+                if (read.eBufferType!=WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
+                    // A request already in flight can precede the close frame.
+                    // Consume it without dispatching work after session finish.
+                    check(read.dwBytesTransferred<=read_buffer_.size(),"Invalid closing receive size");
+                    continue;
+                }
+                const auto left=remaining();
+                if (left.count()<=0) return;
+                const DWORD timeout=static_cast<DWORD>(left.count());
+                check(WinHttpSetOption(socket_->value,WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT,
+                    const_cast<DWORD*>(&timeout),sizeof(timeout)),"Cannot bound WebSocket close handshake");
+                const auto closed=WinHttpWebSocketClose(socket_->value,
+                    WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,nullptr,0);
+                check(closed==NO_ERROR || closed==ERROR_IO_PENDING,"WebSocket graceful close failed");
+                socket_->wait(WINHTTP_CALLBACK_STATUS_CLOSE_COMPLETE,remaining(),stop);
+                return;
+            }
         } catch (...) {} // Closing remains mandatory if the peer has gone away.
     }
     void close() noexcept override {

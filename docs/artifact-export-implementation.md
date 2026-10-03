@@ -27,7 +27,7 @@
 - 요청 수락 시 기록한 monotonic 기한과 UTC 기한을 모두 적용한다. 후속 시계 역행이나 worker 대기가 권한 수명을 연장하지 않는다. HTTP 201 + 빈 응답만 UPLOADED이며 다른 status/응답 유실/비어 있지 않은 body는 실패다.
 - worker는 WSS에 쓰지 않는다. `poll()`의 완료를 Receiver가 원 요청 correlation·connection·송신 sequence로 보낸다. Artifact 초기 ACK는 없다. 파일 내용·해시·최종 파일 참조는 ARTIFACT_RESULT에 넣지 않는다.
 - 채널 장애·유실·감시 오류·lease 만료는 후보와 활성 업로드를 무효화한다. 같은 실행의 반출을 자동 재활성화하지 않는다. TERMINATE는 신규 요청 차단 → sink 분리 → 후보/업로드/Telemetry join → 결과 drain → GUI 종료 결과 순서다.
-- 정상 최종 Control 결과 뒤 최대 500ms의 WebSocket send-channel shutdown을 거친다. 즉시 handle close로 마지막 TERMINATE_RESULT가 유실되던 실제 EXE 타이밍을 보완했다. 장애·외부 취소는 기존 즉시 I/O 취소를 유지한다. 네트워크 송신 완료는 Host 업무 처리 ACK를 보장하지 않는다.
+- 정상 최종 Control 결과 뒤 전체 1초 기한 안에서 WebSocket 송신 종료·상대 close frame 수신·close 완료를 기다린다. send-channel shutdown만 기다린 뒤 handle을 닫을 때 실제 Sandbox에서 마지막 TERMINATE_RESULT가 유실되던 문제를 보완했다. 장애·외부 취소는 기존 즉시 I/O 취소를 유지한다. transport close는 Host 업무 처리 ACK를 보장하지 않는다.
 
 권한·형태·오류 코드는 [반출 계약](artifact-export-contract.md)과 [JSON Schema](contracts/artifact-export-v1/messages.schema.json)를 따른다. 새 Schema는 문서/검증 자료이며 제품 설정 파일이 아니다. 일반 파일 전송 자체에 확장자·UTF-8·악성코드 검사를 넣지 않았으며 최종 TXT 허용 정책과 검사는 Host 책임이다.
 
@@ -59,6 +59,8 @@ Windows x64 MSYS2 UCRT64 GCC 16.2.0, CMake/Ninja Release 제품 빌드 및 일�
 | 실제 WinHTTP WSS | 정상 텍스트 왕복·미신뢰·hostname/pin 불일치 4개 통과. 인증서 거부 시 HTTP 헤더 0바이트 |
 | 공유 문서·Schema | draft 자체 검증, 전체 Envelope 예제 14개, 요청 거부 16개 및 로컬 문서 링크 통과 |
 | 실제 제품 EXE + 독립 TLS peer | 한글/빈 파일 후보→ACK→요청→정확한 PUT→결과, stale/reuse/size/expiry, HTTP403/nonempty201, busy, stalled PUT 중 heartbeat<1초, 종료 취소·join·TERMINATE_RESULT·exit0. 종료 보완 후 3회 연속 및 최종 TLS pin 변경 빌드 1회 통과 |
+| 실제 Windows Sandbox | 후속 close handshake 보완 후 새 VM 두 번 모두 10개 시나리오·TERMINATE_RESULT·exit0·인증서/프로세스/VM 정리 통과. [환경·증거·재현](artifact-sandbox-validation.md) |
+| 후속 WSS close handshake | native 5개: pending receive 있음/없음·종료 직전 메시지·close ACK 없음의 1초 제한·취소 통과. HTTPS 16개·WSS TLS/pin 4개 재실행 및 일반 Windows 제품 peer 시험도 통과 |
 
 기존 lifecycle의 엄격한 프로세스 핸들 수 assert가 간헐적으로 +1을 기록했다. 같은 시험은 변경 전 baseline에서도 재현됐다(current 20회 중1, baseline 20회 중2). 250cycle 비교에서 +1 이후 추가 증가 없이 유지됐으며 원인은 확정하지 않았다. 이번 변경의 지속 누수 증거로 해석하지 않으며 최종 CTest 통과와 이 기존 불안정 측정을 구분한다.
 
@@ -80,6 +82,6 @@ Python peer에는 cryptography가 필요하다. 실제 시험은 기존 Host용 
 
 ## 미검증·남은 결정
 
-실제 Host Artifact Broker/수신기/백신/MCP와 Windows Sandbox 전체 반출은 아직 미검증이다. 위 네트워크 시험은 실제 Windows 제품 EXE와 독립 loopback peer이며 Host 정책·Scanner 성공을 대신하지 않는다. symlink 생성 자체는 Windows 권한 1314로 실행하지 못했으며 실제 junction/reparse 거부를 별도로 검증했다.
+실제 Windows Sandbox의 Runner 반출은 독립 peer로 검증했다. 실제 Host Artifact Broker/수신기/백신/MCP 전체 흐름은 아직 미검증이다. 독립 peer 시험은 Host 정책·Scanner 성공을 대신하지 않는다. symlink 생성 자체는 Windows 권한 1314로 실행하지 못했으며 실제 junction/reparse 거부를 별도로 검증했다.
 
 Host 채택 revision·READY/Telemetry 작업 시작 순서·승인 UX·수신/검사 정책·실제 파일 참조를 연결하고 전체 발표 시나리오를 검증해야 한다. 신규 상주 프로세스나 Sandbox 빌드 도구·별도 검사 모듈은 Runner에 추가하지 않았다.

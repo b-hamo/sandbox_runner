@@ -50,4 +50,4 @@ cmake --build build
 - [기존 GUI 통합](docs/gui-integration.md)
 - [기존 Host 관찰 연결·Sandbox 검증 이력](docs/host-observation-integration.md)
 
-실제 Host/MCP/Windows Sandbox 전체 Artifact 반출은 Host의 새 계약 구현 후 검증한다. 구현된 기능·테스트 peer 결과와 후속 통합 검증을 구분한다.
+실제 Windows Sandbox에서 독립 peer로 Runner Artifact 반출·종료를 두 번 검증했다. [Sandbox 검증 결과·재현](docs/artifact-sandbox-validation.md)을 참고한다. 실제 Host/MCP/Scanner 전체 반출은 Host의 새 계약 구현 후 검증한다.

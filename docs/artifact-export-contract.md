@@ -423,7 +423,7 @@ Host 코드의 예상 수정 지점은 `schema/envelope.schema.json`의 EVENT_AC
 4. `ArtifactExportSession`은 최대 4096개 활성 후보·4096개 사용한 upload_id, 전송 1개·완료 슬롯 1개를 보유한다.
 5. worker는 현재 Detector 세대와 파일 관찰값을 비교하고 `VerifiedFile`로 재검증한 소스를 64 KiB 버퍼로 전송한다.
 6. Receiver만 완료를 원 correlation/connection에 송신한다. TERMINATE 결과는 후보/업로드/Telemetry 종료와 결과 drain 후 전송한다.
-7. 실제 Host 수신·검사·MCP·Windows Sandbox 전체 반출 검증은 Host 구현 후 수행한다.
+7. 실제 Windows Sandbox의 Runner 반출·종료는 독립 peer로 검증했다. 실제 Host 수신·검사·MCP 전체 반출은 Host 구현 후 수행한다.
 
 공유 스키마는 **형태 검증 자료**다. 인증·권한·실제 시각·경로/핸들·길이/기한·중복/상관관계는 코드에서 검증해야 한다.
 스키마 참조는 로컬 파일만 사용하고 예시 `$id` URL로 네트워크 요청하지 않는다.
@@ -443,7 +443,7 @@ Host 코드의 예상 수정 지점은 `schema/envelope.schema.json`의 EVENT_AC
 | 구형 profile와 새 profile 혼합 | 실패가 명확함, 스키마를 추측해 자동 허용하지 않음 |
 
 Runner의 빌드·로컬 검증 결과는 [Runner 구현 기록](artifact-export-implementation.md)에 기록한다.
-Host 수신·검사·MCP 연동과 실제 Windows Sandbox 전체 반출은 **미검증**이다.
+실제 Sandbox의 Runner 반출·종료는 [독립 peer로 검증](artifact-sandbox-validation.md)했다. 실제 Host 수신·검사·MCP 전체 반출은 **미검증**이다.
 Host 담당의 채택 revision·담당자·확인 날짜·실제 상호 운용 결과는 후속 작업에서 기록한다.
 
 ## 13. 2026-10-03 문서 검증 기록
