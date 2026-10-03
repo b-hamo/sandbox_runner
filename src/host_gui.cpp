@@ -1,6 +1,11 @@
 #include "host_gui.h"
 #include "gui_session.h"
 #include "artifact/output_watcher.h"
+#include "artifact_export_session.h"
+#include "artifact_candidate_adapter.h"
+#include "protocol/scrp/artifact_export.h"
+#include "transport/artifact/https_uploader.h"
+#include "host_artifact_channels.h"
 #include "transport/observation/https_uploader.h"
 #include "control/control_util.h"
 #include <wincrypt.h>
@@ -38,7 +43,10 @@ Json::Value bootstrap(const std::wstring& path) {
     auto root=scrp::parse_json(std::string(buffer.data(),n),65536);
     const std::vector<std::string> fields={"bootstrap_version","session_id","runtime_id","generation","host","port","path","token","token_expires_at","host_certificate_pem","observation_upload"};
     require(root.isObject(),"Unsupported Host bootstrap fields");
-    const auto expected_fields=fields.size()+(root.isMember("host_certificate_sha256") ? 1u : 0u);
+    const bool exporting=root.isMember("control_contract") || root.isMember("artifact_upload");
+    require(!exporting || (root["control_contract"]=="artifact-export-v1" && root.isMember("artifact_upload")),
+            "Artifact profile and upload settings must be selected together");
+    const auto expected_fields=fields.size()+(root.isMember("host_certificate_sha256") ? 1u : 0u)+(exporting ? 2u : 0u);
     require(root.size()==expected_fields,"Unsupported Host bootstrap fields");
     for(const auto& f:fields)require(root.isMember(f),"Missing Host bootstrap field");
     require(root["bootstrap_version"]=="1.0" && root["path"]=="/scrp/v1/control", "Unsupported Host bootstrap version/path");
@@ -65,13 +73,21 @@ std::wstring ipv4(const std::wstring& address) {
 struct Monitor {
     HANDLE stop=CreateEventW(nullptr,TRUE,FALSE,nullptr), ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);
     std::atomic<bool> healthy{false};std::atomic<DWORD> error{ERROR_SUCCESS};std::atomic<unsigned> changes{0};std::thread worker;
-    ~Monitor(){if(stop)SetEvent(stop);if(worker.joinable())worker.join();if(ready)CloseHandle(ready);if(stop)CloseHandle(stop);}
+    std::mutex sink_mutex;
+    std::function<void(const artifact::OutputChange&)> sink;
+    void attach(std::function<void(const artifact::OutputChange&)> value) {
+        std::lock_guard<std::mutex> lock(sink_mutex); sink=std::move(value);
+    }
+    void finish(){if(stop)SetEvent(stop);if(worker.joinable())worker.join();}
+    ~Monitor(){finish();if(ready)CloseHandle(ready);if(stop)CloseHandle(stop);}
     void start(const std::wstring& output,HANDLE external_stop) {
         require(stop && ready,"Cannot create Output monitoring events");
         worker=std::thread([&,output,external_stop]{
             DWORD result=ERROR_GEN_FAILURE;
             try { result=artifact::watch_output(output,stop,[&](const artifact::OutputChange& e){
                 if(e.kind==artifact::ChangeKind::ready){healthy=true;SetEvent(ready);}else ++changes;
+                std::lock_guard<std::mutex> lock(sink_mutex);
+                if(sink)sink(e);
             }); } catch(...) {}
             healthy=false;error=result;
             if(WaitForSingleObject(stop,0)!=WAIT_OBJECT_0)SetEvent(external_stop);
@@ -121,6 +137,15 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         std::chrono::milliseconds(5000),observation::AuthorizationMode::Host6055UploadId};
     destination.trust=ctx.connection.trust;
     observation::HttpsUploader uploader(destination);
+    const bool exporting=b.isMember("control_contract");
+    artifact_transfer::Destination artifacts;
+    if(exporting) {
+        const auto& settings=b["artifact_upload"];
+        require(settings.isObject() && settings.size()==2 && settings["path"]=="/scrp/v1/artifacts/",
+                "Unsupported Artifact upload settings");
+        artifacts.origin=L"https://"+address+L":"+std::to_wstring(port(settings["port"]));
+        artifacts.trust=ctx.connection.trust;
+    }
     const std::wstring base=L"C:\\RunnerWorkspace\\Sessions";
     require(artifact::prepare_output_directory(base)==ERROR_SUCCESS,"Cannot prepare Guest workspace");
     Monitor monitor;
@@ -141,7 +166,66 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     });
     monitor.start(gui.workspace().output.wstring(),stop);
     std::cout<<"Host GUI profile 6055cc6: Output monitor ready; Host owns startup/input admission\n"<<std::flush;
-    const DWORD result=run_control_session(std::move(ctx),stop,&gui);
+    DWORD result=ERROR_SUCCESS;
+    if(!exporting) result=run_control_session(std::move(ctx),stop,&gui);
+    else {
+        auto schema=std::make_shared<scrp::ArtifactExportSchema>(gui.schema());
+        auto settings=ctx.connection;
+        settings.endpoint=L"wss://"+address+L":"+std::to_wstring(port(b["port"]))+L"/scrp/v1/telemetry";
+        HostArtifactChannels channels(ctx.session,std::move(settings),std::move(artifacts),
+            gui.workspace().output.wstring(),schema,
+            [&](std::function<void(const artifact::OutputChange&)> sink){monitor.attach(std::move(sink));},
+            [&]{return monitor.healthy.load();});
+        ctx.schema=schema;
+        auto handlers=gui.handlers();
+        const auto terminate=handlers.at("TERMINATE");
+        std::thread artifact_stopper;
+        bool terminating=false;
+        handlers["ARTIFACT_REQUEST"]=[&](const scrp::Envelope& e){return channels.handle(e);};
+        handlers["TERMINATE"]=[&](const scrp::Envelope& e){
+            if(!terminating) {
+                terminating=true;channels.block();
+                artifact_stopper=std::thread([&]{channels.stop();});
+            }
+            return terminate(e);
+        };
+        auto gui_hooks=gui.hooks();
+        std::optional<::control::DeferredReply> held_terminate;
+        ::control::Hooks hooks;
+        hooks.connected=[&](const scrp::Envelope& e){gui_hooks.connected(e);channels.connected(e);};
+        hooks.poll=[&]{
+            auto pending=gui_hooks.poll();
+            std::vector<::control::DeferredReply> ready;
+            for(auto& reply:pending) {
+                if(reply.finish)held_terminate=std::move(reply);
+                else ready.push_back(std::move(reply));
+            }
+            auto uploaded=channels.poll(gui.active());
+            for(auto& reply:uploaded)ready.push_back(std::move(reply));
+            // TERMINATE_RESULT is emitted only after Artifact cancellation,
+            // producer/uploader joins and their final results have been drained.
+            if(held_terminate && channels.stopped()) {
+                ready.push_back(std::move(*held_terminate));held_terminate.reset();
+            }
+            return ready;
+        };
+        hooks.disconnected=[&]{gui_hooks.disconnected();channels.block();};
+        ::control::Receiver receiver(std::move(ctx),std::move(handlers),{},telemetry::make_winhttp_websocket,std::move(hooks));
+        std::atomic<bool> cancelled{false},done{false};
+        std::thread control_worker([&]{receiver.run(cancelled);done=true;});
+        while(!done) {
+            const auto wait=WaitForSingleObject(stop,20);
+            if(wait==WAIT_OBJECT_0){gui.block();cancelled=true;break;}
+            if(wait==WAIT_FAILED){result=GetLastError();gui.block();cancelled=true;break;}
+        }
+        control_worker.join();
+        if(artifact_stopper.joinable())artifact_stopper.join();
+        channels.stop();gui.stop();
+        if(receiver.snapshot().state==::control::State::failed) {
+            std::cerr<<receiver.snapshot().diagnostic<<'\n';result=ERROR_GEN_FAILURE;
+        }
+    }
+    monitor.finish();
     std::cout<<"Output monitor notifications="<<monitor.changes<<'\n';
     return monitor.error!=ERROR_SUCCESS?monitor.error.load():result;
 }

@@ -50,7 +50,7 @@ struct Reply {
     Json::Value error;
 };
 struct Replies {
-    std::vector<Reply> messages; // at most ACK + result, no delayed/asynchronous use
+    std::vector<Reply> messages; // immediate replies; delayed final uses deferred + Hooks::poll
     bool finish = false; // close only after all responses have been sent
     bool deferred = false; // reserve one final response, emitted by Hooks::poll
 };

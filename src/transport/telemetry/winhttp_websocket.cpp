@@ -35,10 +35,41 @@ struct AsyncHandle {
     WINHTTP_WEB_SOCKET_STATUS read{};
     bool closing=false;
     bool callback_set=false;
+    bool close_requested=false, pin_verified=false;
+    std::string pin;
     ~AsyncHandle() { close(); }
-    static void CALLBACK callback(HINTERNET,DWORD_PTR context,DWORD status,void* info,DWORD size) noexcept {
+    void close_request() noexcept {
+        bool do_close=false;
+        { std::lock_guard<std::mutex> lock(mutex); do_close=!close_requested; close_requested=true; }
+        if(do_close && value) WinHttpCloseHandle(value);
+    }
+    static void CALLBACK callback(HINTERNET handle,DWORD_PTR context,DWORD status,void* info,DWORD size) noexcept {
         if(!context) return;
         auto* self=reinterpret_cast<AsyncHandle*>(context);
+        // Verify an optional pin before the Upgrade's credential headers leave
+        // the client. Default Schannel chain/hostname checks remain enabled.
+        if(status==WINHTTP_CALLBACK_STATUS_SENDING_REQUEST && !self->pin.empty()) {
+            bool valid=false;
+            PCCERT_CONTEXT cert=nullptr; DWORD length=sizeof(cert);
+            if(WinHttpQueryOption(handle,WINHTTP_OPTION_SERVER_CERT_CONTEXT,&cert,&length) && cert) {
+                std::array<BYTE,32> hash{}; DWORD hash_size=static_cast<DWORD>(hash.size());
+                if(CryptHashCertificate2(BCRYPT_SHA256_ALGORITHM,0,nullptr,cert->pbCertEncoded,cert->cbCertEncoded,hash.data(),&hash_size) && hash_size==hash.size()) {
+                    try {
+                        std::string hex;
+                        for(auto b:hash) { hex+="0123456789abcdef"[b>>4]; hex+="0123456789abcdef"[b&15]; }
+                        valid=hex==self->pin;
+                    } catch(...) {}
+                }
+                CertFreeCertificateContext(cert);
+            }
+            {
+                std::lock_guard<std::mutex> lock(self->mutex);
+                self->pin_verified=valid;
+                if(!valid) self->error=ERROR_WINHTTP_SECURE_FAILURE;
+                self->changed.notify_all();
+            }
+            if(!valid) { self->close_request(); return; }
+        }
         std::lock_guard<std::mutex> lock(self->mutex);
         if(status==WINHTTP_CALLBACK_STATUS_REQUEST_ERROR)
             self->error=size>=sizeof(WINHTTP_ASYNC_RESULT)?static_cast<WINHTTP_ASYNC_RESULT*>(info)->dwError:ERROR_WINHTTP_CONNECTION_ERROR;
@@ -58,11 +89,12 @@ struct AsyncHandle {
     }
     void close() noexcept {
         if(!value) return;
-        WinHttpCloseHandle(value); value=nullptr;
+        close_request();
         if(callback_set) {
             std::unique_lock<std::mutex> lock(mutex);
             changed.wait(lock,[&]{return closing;});
         }
+        value=nullptr;
     }
     bool wait(DWORD flag,std::chrono::milliseconds timeout,const std::atomic<bool>& stop) {
         const auto end=std::chrono::steady_clock::now()+timeout;
@@ -111,6 +143,7 @@ public:
         connection_=WinHttpConnect(session_,url.host.c_str(),url.port,0);
         check(connection_!=nullptr,"Cannot create WinHTTP connection");
         request_=std::make_unique<AsyncHandle>();
+        request_->pin=settings.trust.leaf_sha256;
         request_->attach(WinHttpOpenRequest(connection_,L"GET",url.path.c_str(),nullptr,
                                           WINHTTP_NO_REFERER,WINHTTP_DEFAULT_ACCEPT_TYPES,WINHTTP_FLAG_SECURE));
         DWORD disabled=WINHTTP_DISABLE_REDIRECTS|WINHTTP_DISABLE_COOKIES|WINHTTP_DISABLE_AUTHENTICATION;
@@ -120,24 +153,13 @@ public:
         async_started(WinHttpSendRequest(request_->value,headers_.c_str(),static_cast<DWORD>(headers_.size()),nullptr,0,0,
                                         reinterpret_cast<DWORD_PTR>(request_.get())));
         wait(*request_,WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE);
+        check(request_->pin.empty() || request_->pin_verified,"TLS certificate pin not verified");
         async_started(WinHttpReceiveResponse(request_->value,nullptr));
         wait(*request_,WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE);
         DWORD status=0,size=sizeof(status);
         check(WinHttpQueryHeaders(request_->value,WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER,
                                  WINHTTP_HEADER_NAME_BY_INDEX,&status,&size,WINHTTP_NO_HEADER_INDEX) && status==101,
               "Telemetry HTTP upgrade rejected");
-        // Default Schannel chain/hostname validation remains enabled. A pin cannot
-        // authorize a self-signed or wrong-host certificate on its own.
-        if(!settings.trust.leaf_sha256.empty()) {
-            PCCERT_CONTEXT cert=nullptr; size=sizeof(cert);
-            check(WinHttpQueryOption(request_->value,WINHTTP_OPTION_SERVER_CERT_CONTEXT,&cert,&size),"Cannot inspect TLS certificate");
-            std::array<BYTE,32> hash{}; DWORD hash_size=static_cast<DWORD>(hash.size());
-            const bool hashed=CryptHashCertificate2(BCRYPT_SHA256_ALGORITHM,0,nullptr,cert->pbCertEncoded,cert->cbCertEncoded,hash.data(),&hash_size);
-            CertFreeCertificateContext(cert);
-            check(hashed && hash_size==hash.size(),"Cannot hash TLS certificate");
-            std::string hex; for(auto b:hash) { hex+="0123456789abcdef"[b>>4]; hex+="0123456789abcdef"[b&15]; }
-            check(hex==settings.trust.leaf_sha256,"TLS certificate pin mismatch");
-        }
         socket_=std::make_unique<AsyncHandle>();
         socket_->attach(WinHttpWebSocketCompleteUpgrade(request_->value,reinterpret_cast<DWORD_PTR>(socket_.get())),true);
         request_.reset(); headers_.clear();
@@ -172,6 +194,16 @@ public:
         check(std::chrono::steady_clock::now()-fragment_started_<settings_.io_timeout,"WebSocket fragmented message timed out");
         if(read.eBufferType==WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE) return false;
         text=std::move(assembled_); assembled_.clear(); fragment_active_=false; return true;
+    }
+    void shutdown(const std::atomic<bool>& stop) noexcept override {
+        if (!socket_ || stop) return;
+        try {
+            const auto result=WinHttpWebSocketShutdown(socket_->value,
+                WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,nullptr,0);
+            if (result==NO_ERROR || result==ERROR_IO_PENDING)
+                socket_->wait(WINHTTP_CALLBACK_STATUS_SHUTDOWN_COMPLETE,
+                    std::chrono::milliseconds(500),stop);
+        } catch (...) {} // Closing remains mandatory if the peer has gone away.
     }
     void close() noexcept override {
         // Closing asynchronous handles cancels I/O. State/buffers survive until

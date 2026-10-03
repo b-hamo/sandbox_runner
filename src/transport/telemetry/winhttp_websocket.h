@@ -38,6 +38,10 @@ public:
     virtual void send(const std::string&,const std::atomic<bool>& stop)=0;
     // false means no complete message yet; a pending asynchronous read is retained.
     virtual bool receive(std::string&,std::chrono::milliseconds poll,const std::atomic<bool>& stop)=0;
+    // Best-effort bounded send-channel shutdown after a final result. Failure
+    // and cancellation paths still use close() immediately. Test transports may
+    // keep the no-op default; this never means the Host acknowledged a result.
+    virtual void shutdown(const std::atomic<bool>&) noexcept {}
     virtual void close() noexcept=0;
 };
 std::unique_ptr<WebSocket> make_winhttp_websocket();

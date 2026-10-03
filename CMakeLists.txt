@@ -7,7 +7,7 @@ endif()
 
 # Single product executable; Control receiver is available for schema integration.
 set(ARTIFACT_CANDIDATE_SOURCES src/artifact/candidate_detector.cpp src/artifact/file_stability.cpp)
-add_executable(sandbox_runner src/main.cpp src/candidate_telemetry.cpp ${ARTIFACT_CANDIDATE_SOURCES})
+add_executable(sandbox_runner src/main.cpp)
 
 # Reusable protocol/transport objects, linked into the single product executable.
 # JsonCpp is a host build dependency; link its static target to avoid a new DLL.
@@ -24,8 +24,11 @@ target_link_libraries(runner_telemetry PUBLIC jsoncpp_static winhttp bcrypt cryp
 add_library(runner_lifecycle STATIC src/session_context.cpp src/runner_lifecycle.cpp src/artifact_candidate_adapter.cpp)
 target_link_libraries(runner_lifecycle PUBLIC runner_telemetry)
 add_library(runner_control STATIC src/transport/control/control_receiver.cpp src/protocol/scrp/host_sender_schema.cpp)
+target_sources(runner_control PRIVATE src/protocol/scrp/artifact_export.cpp)
 target_link_libraries(runner_control PUBLIC runner_telemetry)
 target_sources(runner_lifecycle PRIVATE src/control_session.cpp src/gui_product.cpp src/host_gui.cpp src/artifact/output_watcher.cpp)
+target_sources(runner_lifecycle PRIVATE src/candidate_telemetry.cpp ${ARTIFACT_CANDIDATE_SOURCES}
+    src/artifact_export_session.cpp src/host_artifact_channels.cpp src/transport/artifact/https_uploader.cpp)
 target_link_libraries(runner_lifecycle PUBLIC runner_control)
 target_link_libraries(sandbox_runner PRIVATE runner_lifecycle)
 target_link_libraries(sandbox_runner PRIVATE runner_control)

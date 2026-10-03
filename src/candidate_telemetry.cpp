@@ -23,13 +23,19 @@ bool CandidateTelemetry::PathLess::operator()(const std::wstring& a, const std::
         b.data(), static_cast<int>(b.size()), TRUE) == CSTR_LESS_THAN;
 }
 CandidateTelemetry::CandidateTelemetry(telemetry::TelemetryClient& client,
-    std::shared_ptr<const CandidateEventContract> contract, Diagnostic diagnostic, std::size_t max_files)
-    : client_(client), contract_(std::move(contract)), diagnostic_(std::move(diagnostic)), max_files_(max_files) {
+    std::shared_ptr<const CandidateEventContract> contract, Diagnostic diagnostic, std::size_t max_files,
+    Observer observer)
+    : client_(client), contract_(std::move(contract)), diagnostic_(std::move(diagnostic)),
+      observer_(std::move(observer)), max_files_(max_files) {
     if (!max_files_ || !diagnostic_) throw std::invalid_argument("Missing candidate bridge limits/diagnostics");
     if (!contract_) report("Artifact telemetry unavailable: no CandidateEventContract supplied");
 }
 void CandidateTelemetry::report(const char* message) noexcept {
     try { diagnostic_(message); } catch (...) {}
+}
+void CandidateTelemetry::notify(const CandidateObservation& observation,
+    const artifact::CandidateStatus& status, bool current) {
+    if (observer_) observer_(observation, status, current);
 }
 bool CandidateTelemetry::enqueue(scrp::SecurityEvent event, bool candidate) {
     scrp::validate_event_identity(event);
@@ -49,6 +55,7 @@ bool CandidateTelemetry::enqueue(scrp::SecurityEvent event, bool candidate) {
 void CandidateTelemetry::invalidate(Entry& entry, const artifact::CandidateStatus& cause) {
     if (!entry.active) return;
     entry.active = false; // Local invalidation survives mapping/enqueue failures.
+    notify(entry.observation, cause, false);
     if (!entry.accepted || !contract_) return;
     try {
         const auto id = scrp::uuid_v4(), time = scrp::utc_now();
@@ -66,6 +73,7 @@ void CandidateTelemetry::process(const artifact::CandidateStatus& status) {
     if (terminal_) return;
     if (status.path.empty() && status.state == artifact::CandidateState::unavailable) {
         terminal_ = true;
+        notify({}, status, false);
         for (auto& item : files_) invalidate(item.second, status);
         return;
     }
@@ -101,11 +109,22 @@ void CandidateTelemetry::process(const artifact::CandidateStatus& status) {
     if (entry.observation.event_id.empty())
         entry.observation = {path, status.generation, scrp::uuid_v4(), scrp::utc_now()};
     const auto& observation = entry.observation;
-    entry.accepted = enqueue({observation.event_id, observation.observed_at,
-        contract_->candidate_payload(observation)}, true);
+    scrp::SecurityEvent event{observation.event_id, observation.observed_at,
+        contract_->candidate_payload(observation)};
+    // The Telemetry worker can send immediately after enqueue returns (or even
+    // before it returns). Install the file observation first so a Host request
+    // responding to that event cannot overtake local candidate registration.
+    notify(observation, status, true);
+    entry.accepted = enqueue(std::move(event), true);
+    if (!entry.accepted) notify(observation, status, false);
 }
 void CandidateTelemetry::submit(const artifact::CandidateStatus& status) noexcept {
     try { process(status); }
-    catch (...) { report("Artifact telemetry conversion failed; candidate not reported"); }
+    catch (...) {
+        // Export observers fail closed even when conversion or their callback
+        // fails. The optional observer leaves legacy candidate mode unchanged.
+        try { notify({}, status, false); } catch (...) {}
+        report("Artifact telemetry conversion failed; candidate not reported");
+    }
 }
 } // namespace runner

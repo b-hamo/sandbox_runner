@@ -1,5 +1,9 @@
 # Control 요청 리시버
 
+Issue #23에서 `ARTIFACT_REQUEST`의 지연 최종 결과를 지원하고, 정상 종료 응답 후 최대 500ms의
+WSS send-channel shutdown을 추가했다. 관리 모드는 유지하며 새 제품 경로는
+[Artifact 구현 기록](artifact-export-implementation.md)을 따른다.
+
 Issue [#13](https://github.com/b-hamo/sandbox_runner/issues/13)의 수신 기반 구현이다.
 SCRP W1 v0.1 문서 5~9쪽의 연결 방향·Envelope·허용 요청 타입을 따른다.
 공용 Receiver에는 handshake/payload 계약을 주입한다. 제품 Control 모드에는
@@ -150,4 +154,4 @@ WSS 테스트는 Python cryptography가 필요하며 loopback 테스트 인증�
 
 ## GUI 지연 응답 연결 (#14)
 
-기본 CLI 관리 모드는 유지한다. 신뢰된 Host adapter가 GuiSession을 주입하면 Replies::deferred로 원 요청을 보존하고 Hooks::poll에서 최종 응답을 보낸다. ACK를 먼저 보내고 이후 결과를 송신하며, 최대 33개 작업과 종료 1개를 추적한다. Hooks::connected는 검증된 HELLO_ACK 후 호출되고 disconnected는 모든 종료 경로에서 실행을 차단한다. 구체 계약과 미구현 운영 연결은 [GUI 연동 문서](gui-integration.md)를 따른다.
+기본 CLI 관리 모드는 유지한다. GuiSession은 Replies::deferred로 원 요청을 보존하고 Hooks::poll에서 최종 응답을 보낸다. ACTION_REQUEST는 ACK를 먼저 보내며 OBSERVE와 새 ARTIFACT_REQUEST는 최종 결과만 보낸다. GUI 작업 최대 33개와 Artifact 1개, 종료 1개의 결과를 제한한다. Hooks::connected는 검증된 HELLO_ACK 후 호출되고 disconnected는 모든 종료 경로에서 실행을 차단한다. 현재 제품 GUI/Artifact 연결은 [구조](project-structure.md)와 [구현 기록](artifact-export-implementation.md)을 따른다.
