@@ -55,8 +55,8 @@ Host 기준은 #13과 동일한 `b-hamo/host_control` commit `fed305b06dfcfdced4
 | mouse.move/click/scroll | observation_id·좌표/해상도·10초 만료 확인 후 SendInput |
 | keyboard.type | 엄격한 UTF-8, 최대 4096 bytes, Unicode/개행/Tab 입력 |
 | keyboard.press | 모듈이 지원하는 고정 Key enum만 허용 |
-| keyboard.hotkey | Ctrl/Shift/Alt modifier들 뒤에 주 키 한 개. 다른 순서/미지원 키는 거부 |
-| ui.click_element, Win 키 등 | wire 검증 후 ACK REJECTED, 입력 없음 |
+| keyboard.hotkey | Ctrl/Shift/Alt/Win modifier들 뒤에 주 키 한 개. Win+R·Win+E 등 Windows 단축키 지원. 다른 순서/미지원 키는 거부 |
+| ui.click_element 등 | wire 검증 후 ACK REJECTED, 입력 없음 |
 | HEARTBEAT | UTC 만료를 남은 시간으로 변환하여 최대 15초 monotonic lease 갱신, ALIVE |
 | STATE_REQUEST | 실제 ledger의 PENDING/RUNNING/최종 상태, 없는 ID는 UNKNOWN |
 | TERMINATE | 비동기 stop/join, 완료된 경우에만 worker_stopped=true |

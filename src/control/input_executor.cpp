@@ -51,13 +51,14 @@ VkInfo vk_of(Key key) {
     }
 }
 
-WORD vk_of(Modifier m) {
+VkInfo vk_of(Modifier m) {
     switch (m) {
-        case Modifier::Ctrl:  return VK_LCONTROL;
-        case Modifier::Shift: return VK_LSHIFT;
-        case Modifier::Alt:   return VK_LMENU;
+        case Modifier::Ctrl:  return {VK_LCONTROL, false};
+        case Modifier::Shift: return {VK_LSHIFT, false};
+        case Modifier::Alt:   return {VK_LMENU, false};
+        case Modifier::Win:   return {VK_LWIN, true};  // 확장 스캔코드(E0) 키
     }
-    return 0;
+    return {0, false};
 }
 
 INPUT key_input(WORD vk, bool extended, bool up) {
@@ -151,7 +152,7 @@ ErrorCode validate_arguments(const ActionRequest& req, const InputLimits& limits
         return ErrorCode::InvalidArgument;
     }
     for (const auto modifier : req.modifiers) {
-        if (!vk_of(modifier)) { message = "invalid modifier"; return ErrorCode::InvalidArgument; }
+        if (vk_of(modifier).vk == 0) { message = "invalid modifier"; return ErrorCode::InvalidArgument; }
     }
     switch (req.operation) {
         case Operation::Observe:
@@ -347,12 +348,13 @@ ExecOutcome InputExecutor::hotkey(const std::vector<Modifier>& modifiers, Key ke
     const VkInfo info = vk_of(key);
     if (info.vk == 0) return fail(ErrorCode::InvalidArgument, "unsupported key");
 
-    std::vector<WORD> pressed;
+    std::vector<VkInfo> pressed;
     ExecOutcome result = ok_outcome();
     for (Modifier m : modifiers) {
-        std::vector<INPUT> one{key_input(vk_of(m), false, false)};
+        const VkInfo mod = vk_of(m);
+        std::vector<INPUT> one{key_input(mod.vk, mod.extended, false)};
         if (!send_all(one)) { result = rejected_input("modifier down"); break; }
-        pressed.push_back(vk_of(m));
+        pressed.push_back(mod);
     }
     if (result.status == ActionStatus::Success) {
         std::vector<INPUT> k{key_input(info.vk, info.extended, false),
@@ -361,7 +363,7 @@ ExecOutcome InputExecutor::hotkey(const std::vector<Modifier>& modifiers, Key ke
     }
     // 실패 여부와 관계없이 눌린 modifier는 역순으로 반드시 해제한다(키 고착 방지).
     for (auto it = pressed.rbegin(); it != pressed.rend(); ++it) {
-        std::vector<INPUT> one{key_input(*it, false, true)};
+        std::vector<INPUT> one{key_input(it->vk, it->extended, true)};
         if (!send_all(one)) {
             result = rejected_input("modifier release");
             result.status = ActionStatus::Unknown;
