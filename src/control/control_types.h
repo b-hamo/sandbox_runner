@@ -62,7 +62,8 @@ const char* to_string(ActionStatus status);
 const char* to_string(ErrorCode code);
 
 // keyboard.press / hotkey용 고정 Key Enum.
-// WIN 키는 Win+R 등 실행 경로를 열 수 있으므로 초기 허용 목록에서 제외한다.
+// WIN 키 단독 press는 시작 메뉴만 열고 primary key로는 쓰지 않으므로 Key에는 넣지 않는다.
+// Win+R 등 Windows 단축키는 Modifier::Win + 주 키 조합(keyboard.hotkey)으로만 실행한다.
 enum class Key {
     Enter, Tab, Escape, Backspace, Delete, Space,
     Up, Down, Left, Right, Home, End, PageUp, PageDown,
@@ -72,7 +73,8 @@ enum class Key {
     Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9,
 };
 
-enum class Modifier { Ctrl, Shift, Alt };
+// Win은 Win+R(실행)·Win+E(탐색기) 등 Windows 단축키 조합을 keyboard.hotkey로 열어 준다.
+enum class Modifier { Ctrl, Shift, Alt, Win };
 
 // 문자열 → Enum 변환. 알 수 없는 이름은 std::nullopt (추측하지 않음).
 std::optional<Key> parse_key(const std::string& name);

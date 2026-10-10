@@ -91,7 +91,9 @@ std::optional<Modifier> parse_modifier(const std::string& raw) {
     if (name == "CTRL" || name == "CONTROL") return Modifier::Ctrl;
     if (name == "SHIFT") return Modifier::Shift;
     if (name == "ALT") return Modifier::Alt;
-    return std::nullopt;  // WIN 등은 허용하지 않음
+    if (name == "WIN" || name == "WINDOWS" || name == "META" || name == "SUPER" ||
+        name == "CMD" || name == "LWIN") return Modifier::Win;
+    return std::nullopt;  // 그 외 이름은 추측하지 않는다
 }
 
 }  // namespace runner::control
