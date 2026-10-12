@@ -1,4 +1,5 @@
 #include "gui_session.h"
+#include "control/control_util.h"
 #include <algorithm>
 #include <windows.h>
 #include <stdexcept>
@@ -13,6 +14,27 @@ namespace {
     r.error["retryable"] = false;
     r.error["recommended_next_step"] = "CHECK_GUI_INTEGRATION";
     return r;
+}
+// Title of the window currently in front on the interactive desktop, UTF-8.
+// Empty when there is no foreground window or it has no caption. Top-level
+// captions of other processes are read from the cached title (no WM_GETTEXT),
+// so a frozen foreground app cannot hang this call.
+std::string foreground_window_title() {
+    const HWND hwnd = GetForegroundWindow();
+    if (!hwnd) return {};
+    const int len = GetWindowTextLengthW(hwnd);
+    if (len <= 0) return {};
+    std::wstring wide(static_cast<std::size_t>(len) + 1, L'\0');
+    const int got = GetWindowTextW(hwnd, wide.data(), len + 1);
+    if (got <= 0) return {};
+    wide.resize(static_cast<std::size_t>(got));
+    auto title = control::util::wide_to_utf8(wide);
+    if (title.size() > 256) {  // schema caps foreground_window at 256 bytes
+        std::size_t cut = 256;  // back off to a UTF-8 code-point boundary to stay valid
+        while (cut > 0 && (static_cast<unsigned char>(title[cut]) & 0xC0) == 0x80) --cut;
+        title.resize(cut);
+    }
+    return title;
 }
 ::control::Reply ack(bool accepted, std::size_t queued, const std::string& reason) {
     ::control::Reply r;
@@ -134,6 +156,7 @@ control::ActionRequest GuiSession::translate(const scrp::Envelope& e) {
         r.payload["queue_depth"] = Json::UInt64(s.queued);
         if (e.type == "HEARTBEAT") r.payload["uptime_ms"] = Json::UInt64(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started_).count());
         else {
+            r.payload["foreground_window"] = foreground_window_title();
             r.payload["action_state"] = Json::Value();
             if (!e.payload["action_id"].isNull()) {
                 const auto state = runtime_.state(request_context(e),e.payload["action_id"].asString());

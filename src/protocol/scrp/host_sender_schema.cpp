@@ -176,7 +176,8 @@ void HostSenderSchema::validate_reply(const Envelope& e) const {
         fields(p,{"runtime_state","worker_alive","queue_depth","uptime_ms"}); runtime(p);
         check(number(p["uptime_ms"],0,Json::UInt64(-1)));
     } else if (e.type == "STATE_RESULT") {
-        fields(p,{"runtime_state","worker_alive","queue_depth","action_state"}); runtime(p);
+        fields(p,{"runtime_state","worker_alive","queue_depth","action_state","foreground_window"}); runtime(p);
+        check(text(p["foreground_window"],0,256));
         if (!p["action_state"].isNull()) {
             fields(p["action_state"],{"action_id","status"}); check(text(p["action_state"]["action_id"],1,64));
             check(one(p["action_state"]["status"],{"PENDING","RUNNING","SUCCESS","PARTIAL_SUCCESS","FAILED","UNKNOWN","BLOCKED"}));
