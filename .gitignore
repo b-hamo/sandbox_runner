@@ -1,0 +1,4 @@
+build/
+
+# Local-only verification sources and scripts.
+/tests/
