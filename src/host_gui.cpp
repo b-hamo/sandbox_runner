@@ -155,7 +155,9 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     config.output_monitor_healthy=[&]{return monitor.healthy.load();};
     GuiSession gui(config,[&](const scrp::Envelope& e){
         runtime::HostGrant grant;grant.context={config.binding,e.connection_id.asString()};
-        grant.policy_version="POL-0.1.0";grant.gui_observe=true;grant.gui_input=true;grant.lease=std::chrono::seconds(15);
+        // Keep this compatibility profile aligned with Host host/policy.py::POLICY_VERSION.
+        // POL-0.1.1 permits Win+R; SandboxRuntime still rejects mismatched request revisions.
+        grant.policy_version="POL-0.1.1";grant.gui_observe=true;grant.gui_input=true;grant.lease=std::chrono::seconds(15);
         return grant; // Host Broker owns startup/input admission; no invented verification bools.
     },[&](const scrp::Envelope& e,const control::Observation& png,const std::atomic<bool>& cancelled){
         observation::UploadGrant grant;grant.session=e.session;grant.connection_id=e.connection_id.asString();
