@@ -220,6 +220,10 @@ void ArtifactExportSession::release_snapshot_locked() {
         // Only this worker mutates the snapshot. Reader and detector access is
         // synchronized; no upload can overlap VERIFY or RELEASE.
         std::lock_guard<std::mutex> lock(mutex_);
+        // RELEASE is idempotent when no snapshot is held: the Host may have
+        // lost either the CAPTURE reply or a previous RELEASE reply. Never
+        // release a different live snapshot on that account.
+        if(operation=="RELEASE" && !snapshot_)return snapshot_reply(request);
         if(!snapshot_ || snapshot_id_!=id)return snapshot_reply(request,"SNAPSHOT_UNAVAILABLE");
         if(operation=="RELEASE") {release_snapshot_locked();return snapshot_reply(request);}
         return snapshot_reply(request,snapshot_->validate() ? "OUTPUT_CHANGED" : nullptr);

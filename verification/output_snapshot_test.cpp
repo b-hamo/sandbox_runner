@@ -1,4 +1,5 @@
 #include "artifact/output_snapshot.h"
+#include "artifact_export_session.h"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -6,6 +7,72 @@
 
 namespace fs=std::filesystem;
 void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+
+void protocol_test(const fs::path& root) {
+    const scrp::SessionContext identity{"SES-OUTPUT-TEST","RT-1",1};
+    const auto connection=scrp::uuid_v4();
+    runner::ArtifactExportSession session(root.wstring(),identity,connection,
+        [](const scrp::ArtifactUploadRequest&,artifact::VerifiedFile&,const std::atomic<bool>&)
+            ->scrp::ArtifactTransferResult {throw std::runtime_error("unexpected upload");},
+        [](const std::wstring&,artifact::CandidateStatus&){return false;});
+    auto request=[&](const char* operation,const std::string& id) {
+        Json::Value payload(Json::objectValue);
+        payload["operation"]=operation;payload["snapshot_id"]=id;
+        payload["max_file_bytes"]=1024;payload["max_total_bytes"]=2048;
+        return scrp::make_envelope(identity,connection,1,"OUTPUT_SNAPSHOT_REQUEST",payload);
+    };
+    auto exchange=[&](const scrp::Envelope& req) {
+        auto replies=session.snapshot(req);
+        if(!replies.messages.empty())return replies.messages.front();
+        check(replies.deferred,"snapshot did not reserve deferred response");
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        do {
+            auto completed=session.poll();
+            if(!completed.empty()) {
+                check(completed.size()==1 && completed[0].correlation_id==req.message_id,
+                      "snapshot response correlation mismatch");
+                return completed[0].reply;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while(std::chrono::steady_clock::now()<deadline);
+        throw std::runtime_error("snapshot worker did not finish");
+    };
+    const auto id=scrp::uuid_v4();
+    for(int variant=0;variant<3;++variant) {
+        auto bad=request("CAPTURE",id);
+        if(variant==0)bad.connection_id=scrp::uuid_v4();
+        if(variant==1)++bad.session.generation;
+        if(variant==2)bad.payload["unexpected"]=true;
+        bool rejected=false;
+        try {session.snapshot(bad);}catch(const std::invalid_argument&){rejected=true;}
+        check(rejected,"wrong connection/generation/payload accepted");
+    }
+    check(exchange(request("RELEASE",id)).payload["complete"].asBool(),"empty release failed");
+    const auto captured=exchange(request("CAPTURE",id));
+    check(captured.payload["complete"].asBool() && captured.payload["files"].size()==2,
+          "worker manifest incomplete");
+    check(!exchange(request("CAPTURE",scrp::uuid_v4())).payload["complete"].asBool(),
+          "active snapshot replaced");
+    check(!exchange(request("RELEASE",scrp::uuid_v4())).payload["complete"].asBool(),
+          "wrong snapshot released");
+    check(exchange(request("VERIFY",id)).payload["complete"].asBool(),"matching verify failed");
+    std::ofstream(root/L"late.txt")<<"late";
+    check(!exchange(request("VERIFY",id)).payload["complete"].asBool(),"changed manifest accepted");
+    check(exchange(request("RELEASE",id)).payload["complete"].asBool(),"release failed");
+    check(exchange(request("RELEASE",id)).payload["complete"].asBool(),"repeated release failed");
+    auto too_large=request("CAPTURE",scrp::uuid_v4());too_large.payload["max_file_bytes"]=1;
+    auto rejected=exchange(too_large);
+    check(!rejected.payload["complete"].asBool() && rejected.payload["files"].empty(),
+          "failed capture returned partial manifest");
+    fs::remove(root/L"late.txt");
+    check(exchange(request("CAPTURE",id)).payload["complete"].asBool(),"capture after release failed");
+    session.stop();
+    check(!exchange(request("CAPTURE",id)).payload["complete"].asBool(),"closed session accepted capture");
+    const auto writer=CreateFileW((root/L"sub"/L"first.bin").c_str(),GENERIC_WRITE,
+        FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+    check(writer!=INVALID_HANDLE_VALUE,"termination retained snapshot locks");
+    CloseHandle(writer);
+}
 int main(int argc,char** argv) {
     try {
         check(argc==2,"Pass a new, empty test root inside Windows Sandbox");
@@ -34,6 +101,7 @@ int main(int argc,char** argv) {
             check(snapshot.capture(1024,2048)==ERROR_SUCCESS,"recapture failed");
             check(snapshot.files().size()==2,"recapture missed added file");
         }
+        protocol_test(root);
         check(CreateHardLinkW((root/L"alias.bin").c_str(),first.c_str(),nullptr)!=FALSE,"hardlink test setup failed");
         {
             artifact::OutputSnapshot snapshot(root.wstring());
@@ -42,7 +110,7 @@ int main(int argc,char** argv) {
         }
         fs::remove(root/L"alias.bin");fs::remove(first);fs::remove(root/L"new.txt");
         fs::remove(root/L"sub");fs::remove(root);
-        std::cout<<"Output snapshot verification passed\n";
+        std::cout<<"Output snapshot and worker protocol verification passed\n";
         return 0;
     } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }

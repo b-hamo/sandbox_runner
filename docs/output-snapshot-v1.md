@@ -26,7 +26,9 @@ The correlated `OUTPUT_SNAPSHOT_RESULT` has status OK, null error, and payload:
 Domain failures set `complete=false`, a nonempty `problem`, and an empty `files`
 array. They must never be interpreted as a successfully acquired empty folder.
 Only CAPTURE returns files. VERIFY compares the complete current path list and
-held identities; RELEASE unlocks the matching snapshot. Wrong snapshot IDs,
+held identities; RELEASE unlocks the matching snapshot. RELEASE also succeeds
+when no snapshot is held, so a lost CAPTURE/RELEASE reply can be reconciled
+without repeating CAPTURE. It never releases a different live snapshot. Wrong snapshot IDs,
 overlapping uploads/snapshots, missing channels and repeated CAPTURE are refused.
 No implicit retry, grant reuse or snapshot replacement occurs.
 
@@ -46,3 +48,18 @@ snapshot; forced VM destruction cannot recover bytes never sent to the Host.
 The Runner also creates `Desktop/Output.lnk`, targeting the actual session Output.
 It is a shortcut, not another directory or writable Host mapping. A pre-existing
 unrelated shortcut is refused rather than overwritten.
+
+## Verification
+
+`-DRUNNER_BUILD_TESTS=ON` builds `output_snapshot_test`. Run it only inside
+Windows Sandbox, passing a new absolute test directory. The test exercises real
+file locks/digests and the asynchronous snapshot worker: connection/generation
+binding, strict payloads, response correlation, active snapshot refusal, matching
+and repeated RELEASE, VERIFY after an added file, failed size-limited capture,
+and lock cleanup on stop. Upload transport, Defender and human approval require
+the separate Host integration verification.
+
+On 2026-11-03 the Guest Input copy printed
+`Output snapshot and worker protocol verification passed`, `NATIVE_EXIT=0`.
+The imported package SHA-256 was
+`507f60d1625c1bea5172dee3c9da768da212cc3aa014f6ed68478f45b950f8c8`.
