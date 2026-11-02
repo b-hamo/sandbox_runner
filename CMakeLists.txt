@@ -6,7 +6,7 @@ if(NOT WIN32)
 endif()
 
 # Single product executable; Control receiver is available for schema integration.
-set(ARTIFACT_CANDIDATE_SOURCES src/artifact/candidate_detector.cpp src/artifact/file_stability.cpp)
+set(ARTIFACT_CANDIDATE_SOURCES src/artifact/candidate_detector.cpp src/artifact/file_stability.cpp src/artifact/output_snapshot.cpp)
 add_executable(sandbox_runner src/main.cpp)
 
 # Reusable protocol/transport objects, linked into the single product executable.
@@ -43,10 +43,19 @@ endif()
 add_library(runner_gui STATIC
     src/control/control_types.cpp src/control/control_util.cpp
     src/control/screen_capture.cpp src/control/input_executor.cpp
-    src/control/action_scheduler.cpp src/runtime/session_workspace.cpp
+    src/control/action_scheduler.cpp src/runtime/session_workspace.cpp src/runtime/output_shortcut.cpp
     src/runtime/sandbox_runtime.cpp src/gui_session.cpp
     src/transport/observation/https_uploader.cpp)
 target_compile_features(runner_gui PUBLIC cxx_std_17)
 target_compile_definitions(runner_gui PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(runner_gui PUBLIC runner_control user32 gdi32 ole32 windowscodecs uuid bcrypt)
+target_link_libraries(runner_gui PUBLIC runner_control user32 gdi32 ole32 shell32 windowscodecs uuid bcrypt)
 target_link_libraries(runner_lifecycle PUBLIC runner_gui)
+
+option(RUNNER_BUILD_TESTS "Build explicit Windows Sandbox verification executables" OFF)
+if(RUNNER_BUILD_TESTS)
+    add_executable(output_snapshot_test verification/output_snapshot_test.cpp)
+    target_link_libraries(output_snapshot_test PRIVATE runner_lifecycle)
+    if(MINGW)
+        target_link_options(output_snapshot_test PRIVATE -static)
+    endif()
+endif()

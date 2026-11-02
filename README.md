@@ -16,6 +16,12 @@ Windows Sandbox 내부에서 GUI 관찰·입력, 세션 Output 감시, Artifact 
 
 Host bootstrap 모드의 Output은 `C:\RunnerWorkspace\Sessions\session-<session_id>\runtime-<runtime_id>\generation-<generation>\output`이다. 독립 모드 기본값은 `C:\RunnerWorkspace\Output`이다. 모두 Guest 내부 폴더이며 Host에 쓰기 가능한 공유 Output을 만들지 않는다. 경로·기존 파일을 요청에서 임의로 재지정하지 않는다.
 
+Host bootstrap 모드는 바탕화면에 **Output 바로가기**를 생성해 위 세션 폴더를 연다.
+바로가기는 실제 폴더가 아니므로 `Desktop\Output\파일명`을 경로 문자열로 조합하지 않는다.
+`artifact.output.v1` 협상 시 전체 파일 목록 잠금·SHA-256·종료 전 확보를 지원한다.
+Host #105와 함께 적용하며, 검사와 사용자 최종 승인 전에는 Host 다운로드에 공개하지 않는다.
+[종료 전 Output 확보 계약](docs/output-snapshot-v1.md).
+
 ## Artifact 반출
 
 파일 생성 → 안정화 → `SECURITY_EVENT(ARTIFACT_CANDIDATE)` → Host 후보 등록/승인 → `ARTIFACT_REQUEST` → 현재 후보·핸들 재검증 → HTTPS PUT → `ARTIFACT_RESULT` 순서다. 후보에는 event_id·관찰 시각·상대 경로만 보고하며 파일 바이트·해시는 넣지 않는다.
