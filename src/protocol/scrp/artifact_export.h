@@ -6,7 +6,12 @@
 namespace scrp {
 constexpr const char* artifact_export_contract = "artifact-export-v1";
 constexpr const char* artifact_export_capability = "artifact.export.v1";
+constexpr const char* output_snapshot_capability = "artifact.output.v1";
 constexpr std::uint64_t artifact_max_bytes = 52428800;
+constexpr std::uint64_t output_snapshot_max_bytes = 209715200;
+// Keep the complete manifest below the Control channel's 64 KiB envelope limit.
+constexpr std::size_t output_manifest_max_bytes = 49152;
+void validate_output_snapshot_request(const Envelope&);
 
 struct ArtifactUploadRequest {
     std::string candidate_event_id, upload_id, upload_token;
@@ -46,6 +51,7 @@ private:
     mutable SessionContext session_;
     mutable std::string connection_id_;
     mutable bool negotiated_ = false;
+    mutable bool output_negotiated_ = false;
     mutable telemetry::ChannelCredential telemetry_;
 };
 

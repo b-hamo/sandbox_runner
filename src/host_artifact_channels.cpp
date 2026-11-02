@@ -28,7 +28,7 @@ void HostArtifactChannels::connected(const scrp::Envelope& ack) {
     // candidate. Invalid startup ordering is a protocol failure, never a grant
     // that can later be retried implicitly on the same upload ID.
     if (!exports_) throw std::runtime_error("Artifact channel is not ready");
-    return exports_->handle(request);
+    return request.type=="OUTPUT_SNAPSHOT_REQUEST" ? exports_->snapshot(request) : exports_->handle(request);
 }
 std::vector<::control::DeferredReply> HostArtifactChannels::poll(bool gui_active) {
     if (blocked_) return exports_ ? exports_->poll() : std::vector<::control::DeferredReply>{};

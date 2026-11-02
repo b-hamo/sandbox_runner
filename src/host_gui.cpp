@@ -1,4 +1,5 @@
 #include "host_gui.h"
+#include "runtime/output_shortcut.h"
 #include "gui_session.h"
 #include "artifact/output_watcher.h"
 #include "artifact_export_session.h"
@@ -166,6 +167,8 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         grant.max_bytes=8u*1024u*1024u;grant.max_pixels=16000000;
         return uploader.upload(grant,e,png,cancelled);
     });
+    const auto output_shortcut=runtime::create_output_shortcut(gui.workspace().output);
+    std::cout<<"Guest desktop Output shortcut ready: "<<control::util::wide_to_utf8(output_shortcut.wstring())<<'\n';
     monitor.start(gui.workspace().output.wstring(),stop);
     std::cout<<"Host GUI profile 6055cc6: Output monitor ready; Host owns startup/input admission\n"<<std::flush;
     DWORD result=ERROR_SUCCESS;
@@ -184,6 +187,7 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         std::thread artifact_stopper;
         bool terminating=false;
         handlers["ARTIFACT_REQUEST"]=[&](const scrp::Envelope& e){return channels.handle(e);};
+        handlers["OUTPUT_SNAPSHOT_REQUEST"]=[&](const scrp::Envelope& e){return channels.handle(e);};
         handlers["TERMINATE"]=[&](const scrp::Envelope& e){
             if(!terminating) {
                 terminating=true;channels.block();

@@ -86,6 +86,17 @@ void validate_result(const Envelope& e) {
 }
 }
 
+void validate_output_snapshot_request(const Envelope& e) {
+    check(e.type == "OUTPUT_SNAPSHOT_REQUEST"); artifact_identity(e);
+    check(e.correlation_id.isNull() && e.status.isNull() && e.error.isNull());
+    const auto& p=e.payload;
+    fields(p,{"snapshot_id","operation","max_file_bytes","max_total_bytes"});
+    check(p["snapshot_id"].isString() && valid_uuid_v4(p["snapshot_id"].asString()));
+    check(p["operation"]=="CAPTURE" || p["operation"]=="VERIFY" || p["operation"]=="RELEASE");
+    check(number(p["max_file_bytes"],1,artifact_max_bytes) &&
+        number(p["max_total_bytes"],1,output_snapshot_max_bytes));
+}
+
 std::chrono::system_clock::time_point artifact_utc_time(const std::string& stamp) {
     validate_utc_timestamp(stamp);
     SYSTEMTIME utc{};
@@ -158,8 +169,9 @@ Json::Value ArtifactExportSchema::hello(const SessionContext& session) const {
     check(payload["capabilities"].isArray());
     check(std::find(payload["capabilities"].begin(),payload["capabilities"].end(),Json::Value(artifact_export_capability)) == payload["capabilities"].end());
     payload["capabilities"].append(artifact_export_capability);
+    payload["capabilities"].append(output_snapshot_capability);
     session_identity(session);
-    std::lock_guard<std::mutex> lock(mutex_); session_ = session; connection_id_.clear(); negotiated_ = false; telemetry_ = {};
+    std::lock_guard<std::mutex> lock(mutex_); session_ = session; connection_id_.clear(); negotiated_ = false; output_negotiated_ = false; telemetry_ = {};
     return payload;
 }
 std::string ArtifactExportSchema::hello_ack(const Envelope& e) const {
@@ -169,11 +181,13 @@ std::string ArtifactExportSchema::hello_ack(const Envelope& e) const {
     const auto& allowed = e.payload["allowed_capabilities"];
     check(allowed.isArray() && allowed.size() <= 32);
     compatible.payload["allowed_capabilities"] = Json::Value(Json::arrayValue);
-    bool enabled = false;
+    bool enabled = false, output_enabled = false;
     for (const auto& value : allowed) {
         if (value == artifact_export_capability) { check(!enabled); enabled = true; }
+        else if (value == output_snapshot_capability) { check(!output_enabled); output_enabled = true; }
         else compatible.payload["allowed_capabilities"].append(value);
     }
+    check(!output_enabled || enabled);
     // Existing schema still validates every other HELLO_ACK field/capability.
     const auto connection = delegate_->hello_ack(compatible);
     const auto& credential = e.payload["channel_credentials"]["telemetry"];
@@ -187,6 +201,7 @@ std::string ArtifactExportSchema::hello_ack(const Envelope& e) const {
     telemetry::validate_credential(channel);
     std::lock_guard<std::mutex> lock(mutex_); check(same_session(session_,e.session));
     negotiated_ = enabled; connection_id_ = connection; telemetry_ = enabled ? channel : telemetry::ChannelCredential{};
+    output_negotiated_ = output_enabled;
     return connection;
 }
 bool ArtifactExportSchema::artifact_allowed() const { std::lock_guard<std::mutex> lock(mutex_); return negotiated_; }
@@ -194,11 +209,42 @@ telemetry::ChannelCredential ArtifactExportSchema::telemetry_credential() const 
     std::lock_guard<std::mutex> lock(mutex_); check(negotiated_); telemetry::validate_credential(telemetry_); return telemetry_;
 }
 void ArtifactExportSchema::validate_request(const Envelope& e) const {
+    if (e.type == "OUTPUT_SNAPSHOT_REQUEST") {
+        validate_output_snapshot_request(e);
+        std::lock_guard<std::mutex> lock(mutex_);
+        check(output_negotiated_ && same_session(session_,e.session) && e.connection_id == connection_id_);
+        return;
+    }
     if (e.type != "ARTIFACT_REQUEST") { delegate_->validate_request(e); return; }
     parse_artifact_request(e);
     std::lock_guard<std::mutex> lock(mutex_); check(negotiated_ && same_session(session_,e.session) && e.connection_id == connection_id_);
 }
 void ArtifactExportSchema::validate_reply(const Envelope& e) const {
+    if (e.type == "OUTPUT_SNAPSHOT_RESULT") {
+        artifact_identity(e);
+        check(e.correlation_id.isString() && valid_uuid_v4(e.correlation_id.asString()) &&
+            e.status == "OK" && e.error.isNull());
+        const auto& p=e.payload;
+        fields(p,{"snapshot_id","operation","complete","problem","files"});
+        check(p["snapshot_id"].isString() && valid_uuid_v4(p["snapshot_id"].asString()) &&
+            (p["operation"]=="CAPTURE" || p["operation"]=="VERIFY" || p["operation"]=="RELEASE") &&
+            p["complete"].isBool() && p["files"].isArray() && p["files"].size()<=4096 &&
+            json_text(p).size()<=output_manifest_max_bytes);
+        check(p["complete"].asBool() ? p["problem"].isNull() :
+            (p["problem"].isString() && !p["problem"].asString().empty() && p["files"].empty()));
+        check(p["operation"]=="CAPTURE" || p["files"].empty());
+        for (const auto& file:p["files"]) {
+            fields(file,{"candidate_event_id","relative_path","size_bytes","sha256"});
+            check(file["candidate_event_id"].isString() && valid_uuid_v4(file["candidate_event_id"].asString()) &&
+                file["relative_path"].isString() && !file["relative_path"].asString().empty() &&
+                valid_utf8(file["relative_path"].asString()) && number(file["size_bytes"],0,artifact_max_bytes));
+            check(file["sha256"].isString() && file["sha256"].asString().size()==64 &&
+                file["sha256"].asString().find_first_not_of("0123456789abcdef")==std::string::npos);
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        check(output_negotiated_ && same_session(session_,e.session) && e.connection_id == connection_id_);
+        return;
+    }
     if (e.type != "ARTIFACT_RESULT") { delegate_->validate_reply(e); return; }
     validate_result(e);
     std::lock_guard<std::mutex> lock(mutex_); check(negotiated_ && same_session(session_,e.session) && e.connection_id == connection_id_);

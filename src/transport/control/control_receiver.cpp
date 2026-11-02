@@ -8,7 +8,7 @@ namespace control {
 namespace {
 bool request_type(const std::string& type) {
     return type == "OBSERVE" || type == "ACTION_REQUEST" || type == "STATE_REQUEST" ||
-           type == "HEARTBEAT" || type == "ARTIFACT_REQUEST" || type == "TERMINATE";
+           type == "HEARTBEAT" || type == "ARTIFACT_REQUEST" || type == "OUTPUT_SNAPSHOT_REQUEST" || type == "TERMINATE";
 }
 void require(bool value) {
     if (!value) throw std::runtime_error("Control protocol rejected");
@@ -34,6 +34,7 @@ bool reply_type(const std::string& request, const std::string& reply) {
     if (request == "OBSERVE") return reply == "OBSERVE_RESULT";
     if (request == "STATE_REQUEST") return reply == "STATE_RESULT";
     if (request == "TERMINATE") return reply == "TERMINATE_RESULT";
+    if (request == "OUTPUT_SNAPSHOT_REQUEST") return reply == "OUTPUT_SNAPSHOT_RESULT";
     return request == "ARTIFACT_REQUEST" && reply == "ARTIFACT_RESULT";
 }
 }
@@ -180,14 +181,14 @@ void Receiver::run(const std::atomic<bool>& stop) {
                 if (replies.deferred) {
                     require(bool(hooks_.poll) && !replies.finish);
                     require(request.type == "ACTION_REQUEST" || request.type == "OBSERVE" ||
-                            request.type == "ARTIFACT_REQUEST" || request.type == "TERMINATE");
+                            request.type == "ARTIFACT_REQUEST" || request.type == "OUTPUT_SNAPSHOT_REQUEST" || request.type == "TERMINATE");
                     if (request.type == "ACTION_REQUEST")
                         require(replies.messages.size() == 1 && replies.messages[0].type == "ACK" && replies.messages[0].status == "ACCEPTED");
                     else require(replies.messages.empty());
                     require(pending.size() < 35);
-                    if (request.type == "ARTIFACT_REQUEST")
+                    if (request.type == "ARTIFACT_REQUEST" || request.type == "OUTPUT_SNAPSHOT_REQUEST")
                         require(std::none_of(pending.begin(),pending.end(),[](const auto& item) {
-                            return item.second.type=="ARTIFACT_REQUEST";
+                            return item.second.type=="ARTIFACT_REQUEST" || item.second.type=="OUTPUT_SNAPSHOT_REQUEST";
                         })); // busy requests must finish synchronously
                     pending.emplace(request.message_id, request);
                 }
