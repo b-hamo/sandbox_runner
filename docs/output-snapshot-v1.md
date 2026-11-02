@@ -63,3 +63,17 @@ On 2026-11-03 the Guest Input copy printed
 `Output snapshot and worker protocol verification passed`, `NATIVE_EXIT=0`.
 The imported package SHA-256 was
 `507f60d1625c1bea5172dee3c9da768da212cc3aa014f6ed68478f45b950f8c8`.
+
+The latest integrated session `SES-b4062448bd9a45b8851b7eaf6a268292` on
+2026-11-03 used Runner `0bbacd3`, Host `c0f4047`, and unchanged Manager
+`66923d3`. Runner binary SHA-256:
+`2a9c0f156e74aa0371a34ba6f66515359846e4fab101a9168ee2e2e4e2205641`.
+Three harmless samples were written through Desktop Output: a 7-byte BIN and
+22-byte ZIP exported while running, and a 10-byte TXT exported after the user
+closed the Sandbox window. The final CAPTURE/VERIFY completed before TERMINATE;
+Manager cleanup preceded the TXT review/scan/final approval. All three completed
+through the installed SecureArtifactScanner and real user dialogs. Downloaded
+bytes and SHA-256 matched, each had MOTW ZoneId=3, and no duplicate files or
+Host staged payloads remained. Host regression: 703 passed, 55 skipped; skipped
+service/admin tests are not counted as live-service evidence. Full evidence and
+limitations: [Host validation](https://github.com/b-hamo/host_control/blob/feat/105-output-only-export/docs/output-only-validation.md).
