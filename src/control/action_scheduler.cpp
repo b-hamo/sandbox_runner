@@ -72,6 +72,7 @@ ActionScheduler::ActionScheduler(Config config)
         !config_.capture.max_png_bytes || config_.capture.max_png_bytes > 8u*1024u*1024u ||
         !config_.capture.max_pixels || config_.capture.max_pixels > 16000000ull)
         throw std::invalid_argument("invalid scheduler limits");
+    backend_->set_execution_gate(config_.execution_gate);
 }
 
 ActionScheduler::~ActionScheduler() { stop(); }

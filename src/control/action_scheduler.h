@@ -34,6 +34,7 @@ namespace runner::control {
 class WorkerBackend {
 public:
     virtual ~WorkerBackend() = default;
+    virtual void set_execution_gate(std::function<ErrorCode()> gate) { (void)gate; }
     virtual CaptureResult capture(const CaptureLimits&) = 0;
     virtual void screen_size(int& width, int& height) = 0;
     virtual ExecOutcome input(const ActionRequest&, std::chrono::steady_clock::time_point,

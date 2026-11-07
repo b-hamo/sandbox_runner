@@ -1,4 +1,5 @@
 #include "sandbox_runtime.h"
+#include "../control/app_window_backend.h"
 #include <stdexcept>
 
 namespace runner::runtime {
@@ -34,7 +35,8 @@ bool SandboxRuntime::matches(const RequestContext& context) const {
         context.connection_id == grant_.context.connection_id;
 }
 ErrorCode SandboxRuntime::gate() const {
-    if (config_.startup_authority == StartupAuthority::Host6055 &&
+    if ((config_.startup_authority == StartupAuthority::Host6055 ||
+         config_.startup_authority == StartupAuthority::HostAppWindow) &&
         (!config_.output_monitor_healthy || !config_.output_monitor_healthy())) blocked_.store(true);
     if (blocked_.load()) return ErrorCode::Cancelled;
     if (tick_ms() >= lease_until_.load()) {
@@ -61,7 +63,9 @@ void SandboxRuntime::activate(const HostGrant& grant) {
     if (activated_ || blocked_.load() || stopped_) throw std::logic_error("runtime cannot be reactivated");
     const bool startup_ok = config_.startup_authority == StartupAuthority::VerifiedGrant
         ? probe_ok_ && grant.startup_verified && grant.network_policy_verified && grant.required_monitoring_verified
-        : config_.startup_authority == StartupAuthority::Host6055 && !config_.worker.backend &&
+        : ((config_.startup_authority == StartupAuthority::Host6055 && !config_.worker.backend) ||
+           (config_.startup_authority == StartupAuthority::HostAppWindow && probe_ok_ &&
+            is_app_window_backend(config_.worker.backend))) &&
           config_.output_monitor_healthy && config_.output_monitor_healthy();
     if (!same(grant.context.binding, config_.binding) || grant.context.connection_id.empty() ||
         grant.context.connection_id.size() > 128 || grant.policy_version.empty() || grant.policy_version.size() > 128 ||

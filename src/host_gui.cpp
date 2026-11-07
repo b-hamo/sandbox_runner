@@ -1,4 +1,5 @@
 #include "host_gui.h"
+#include "control/app_window_backend.h"
 #include "runtime/output_shortcut.h"
 #include "gui_session.h"
 #include "artifact/output_watcher.h"
@@ -98,7 +99,7 @@ struct Monitor {
     }
 };
 }
-DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address,HANDLE stop) {
+DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address,HANDLE stop,bool app_window) {
     require(stop && WaitForSingleObject(stop,0)==WAIT_TIMEOUT,"Host GUI startup cancelled");
     const auto b=bootstrap(file);
     std::wstring address=override_address;
@@ -153,6 +154,11 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     runtime::SandboxRuntime::Config config;
     config.binding={ctx.session.session_id,ctx.session.runtime_id,ctx.session.generation};config.guest_workspace_base=base;
     config.startup_authority=runtime::SandboxRuntime::StartupAuthority::Host6055;
+    if(app_window) {
+        config.worker.backend=control::make_app_window_backend(ctx.session.session_id);
+        config.worker.max_observations=1;
+        config.startup_authority=runtime::SandboxRuntime::StartupAuthority::HostAppWindow;
+    }
     config.output_monitor_healthy=[&]{return monitor.healthy.load();};
     GuiSession gui(config,[&](const scrp::Envelope& e){
         runtime::HostGrant grant;grant.context={config.binding,e.connection_id.asString()};
@@ -167,8 +173,13 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         grant.max_bytes=8u*1024u*1024u;grant.max_pixels=16000000;
         return uploader.upload(grant,e,png,cancelled);
     });
-    const auto output_shortcut=runtime::create_output_shortcut(gui.workspace().output);
-    std::cout<<"Guest desktop Output shortcut ready: "<<control::util::wide_to_utf8(output_shortcut.wstring())<<'\n';
+    if(app_window) {
+        require(gui.startup_probe().ok,"App-window startup capture failed");
+        std::cout<<"App-window session Output: "<<control::util::wide_to_utf8(gui.workspace().output.wstring())<<'\n';
+    } else {
+        const auto output_shortcut=runtime::create_output_shortcut(gui.workspace().output);
+        std::cout<<"Guest desktop Output shortcut ready: "<<control::util::wide_to_utf8(output_shortcut.wstring())<<'\n';
+    }
     monitor.start(gui.workspace().output.wstring(),stop);
     std::cout<<"Host GUI profile 6055cc6: Output monitor ready; Host owns startup/input admission\n"<<std::flush;
     DWORD result=ERROR_SUCCESS;

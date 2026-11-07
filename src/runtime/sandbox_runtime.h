@@ -41,7 +41,7 @@ struct RuntimeSnapshot {
 
 class SandboxRuntime {
 public:
-    enum class StartupAuthority { VerifiedGrant, Host6055 };
+    enum class StartupAuthority { VerifiedGrant, Host6055, HostAppWindow };
     struct Config {
         SessionBinding binding;
         std::filesystem::path guest_workspace_base;

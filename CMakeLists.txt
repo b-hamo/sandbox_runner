@@ -42,7 +42,7 @@ endif()
 # Imported Windows GUI executor + trusted SCRP adapter, in the same Runner EXE.
 add_library(runner_gui STATIC
     src/control/control_types.cpp src/control/control_util.cpp
-    src/control/screen_capture.cpp src/control/input_executor.cpp
+    src/control/screen_capture.cpp src/control/input_executor.cpp src/control/app_window_backend.cpp
     src/control/action_scheduler.cpp src/runtime/session_workspace.cpp src/runtime/output_shortcut.cpp
     src/runtime/sandbox_runtime.cpp src/gui_session.cpp
     src/transport/observation/https_uploader.cpp)
