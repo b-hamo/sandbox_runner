@@ -2,7 +2,8 @@
 
 이 문서는 초기 점검 이력이다. 이후 앱 창 연동과 2026-11-08 실제 WSB A + micro_VM B/C 실행은
 host_control PR #115의 `docs/mixed-vm-followup-20261108.md`에 기록했다.
-최신 재연결 수정본의 실제 중계 장애 복구는 아직 검증되지 않았다. [앱 창 계약](app-window.md)을 함께 참조한다.
+2026-11-08 후속 시험에서 실제 중계 재연결·한글 유지·검사 반출을 확인했다.
+최초 전체 바탕화면 목표는 미완료다. [앱 창 계약](app-window.md)을 함께 참조한다.
 
 관련: b-hamo/sandbox_runner#37, b-hamo/host_control#113, b-hamo/micro_VM#1.
 

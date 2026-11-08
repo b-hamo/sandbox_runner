@@ -37,7 +37,7 @@ control::Reply artifact_result_reply(const ArtifactUploadRequest&, ArtifactTrans
 // HELLO_ACK's credentials become available only after full validation.
 class ArtifactExportSchema final : public control::Schema {
 public:
-    explicit ArtifactExportSchema(std::shared_ptr<const control::Schema> delegate);
+    explicit ArtifactExportSchema(std::shared_ptr<const control::Schema> delegate, bool reconnect = false);
     Json::Value hello(const SessionContext&) const override;
     std::string hello_ack(const Envelope&) const override;
     void validate_request(const Envelope&) const override;
@@ -47,6 +47,7 @@ public:
     telemetry::ChannelCredential telemetry_credential() const;
 private:
     std::shared_ptr<const control::Schema> delegate_;
+    bool reconnect_ = false;
     mutable std::mutex mutex_;
     mutable SessionContext session_;
     mutable std::string connection_id_;

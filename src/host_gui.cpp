@@ -187,7 +187,7 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     else {
       for (unsigned reconnects=0;;) {
         std::optional<telemetry::ChannelCredential> next_credential;
-        auto schema=std::make_shared<scrp::ArtifactExportSchema>(gui.schema());
+        auto schema=std::make_shared<scrp::ArtifactExportSchema>(gui.schema(),true);
         auto settings=ctx.connection;
         settings.endpoint=L"wss://"+address+L":"+std::to_wstring(port(b["port"]))+L"/scrp/v1/telemetry";
         HostArtifactChannels channels(ctx.session,std::move(settings),artifacts,

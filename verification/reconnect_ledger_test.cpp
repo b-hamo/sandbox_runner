@@ -1,6 +1,7 @@
 #include "control/action_scheduler.h"
 #include "runtime/sandbox_runtime.h"
 #include "transport/control/control_receiver.h"
+#include "protocol/scrp/artifact_export.h"
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -49,10 +50,37 @@ void runtime_binding_test() {
     runtime.stop();
 }
 struct TestSchema : ::control::Schema {
-    Json::Value hello(const scrp::SessionContext&) const override { return Json::Value(Json::objectValue); }
+    Json::Value hello(const scrp::SessionContext&) const override {
+        Json::Value payload(Json::objectValue); payload["capabilities"]=Json::Value(Json::arrayValue); return payload;
+    }
     std::string hello_ack(const scrp::Envelope&) const override { return "CONN-test"; }
     void validate_request(const scrp::Envelope&) const override {}
 };
+void artifact_reconnect_contract_test() {
+    const scrp::SessionContext session{"SES-contract-test","RT-test",1};
+    for(bool opt_in:{false,true}) {
+        scrp::ArtifactExportSchema schema(std::make_shared<TestSchema>(),opt_in);
+        const auto hello=schema.hello(session);
+        bool advertised=false;
+        for(const auto& cap:hello["capabilities"])if(cap=="artifact.reconnect.v1")advertised=true;
+        check(advertised==opt_in,"reconnect advertised without owning shutdown lifecycle");
+        for(int scenario=0;scenario<4;++scenario) {
+            schema.hello(session);
+            scrp::Envelope ack;ack.type="HELLO_ACK";ack.sequence_number=1;ack.session=session;
+            ack.correlation_id=scrp::uuid_v4();
+            auto& caps=ack.payload["allowed_capabilities"];caps=Json::Value(Json::arrayValue);
+            if(scenario!=1)caps.append("artifact.export.v1");
+            if(scenario!=2)caps.append("artifact.output.v1");
+            caps.append("artifact.reconnect.v1");
+            if(scenario==3)caps.append("artifact.reconnect.v1");
+            ack.payload["channel_credentials"]["telemetry"]["token"]=std::string(48,'a');
+            ack.payload["channel_credentials"]["telemetry"]["expires_at"]="2099-01-01T00:00:00Z";
+            bool accepted=false;
+            try{schema.hello_ack(ack);accepted=true;}catch(const std::exception&){}
+            check(accepted==(opt_in && scenario==0),"invalid artifact reconnect grant accepted");
+        }
+    }
+}
 void failure_classification_test() {
     for(bool transport:{false,true}) {
         ::control::Context context;
@@ -92,6 +120,7 @@ int main() {
     worker.stop();
     runtime_binding_test();
     failure_classification_test();
+    artifact_reconnect_contract_test();
     std::cout<<"PASS: reconnect retains execution ledger; duplicate and conflicting input not replayed\n";
     return 0;
   }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
