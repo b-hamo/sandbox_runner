@@ -68,6 +68,7 @@ public:
 
     void start();
     void stop();
+    void restart_after_disconnect(); // owner only, joined worker; retains action ledger
     // Nonblocking: closes admission and cooperatively cancels current input.
     // Host must kill the Runner process for a stuck OS call / emergency stop.
     std::size_t request_stop(); // number of queued jobs newly cancelled

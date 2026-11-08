@@ -116,6 +116,18 @@ void ActionScheduler::stop() {
     running_ = false;
 }
 
+void ActionScheduler::restart_after_disconnect() {
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (running_ || worker_.joinable() || !stopping_ || !queue_.empty())
+        throw std::logic_error("reconnect requires a completely stopped worker");
+    observations_.clear();
+    cancelled_.store(false);
+    stopping_ = false;
+    worker_ = std::thread(&ActionScheduler::worker_loop, this);
+    running_ = true;
+}
+
 std::string ActionScheduler::fingerprint(const ActionRequest& r) {
     std::ostringstream s;
     const char sep = '\x1f';

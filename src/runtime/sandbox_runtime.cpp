@@ -73,8 +73,19 @@ void SandboxRuntime::activate(const HostGrant& grant) {
         !valid_lease(grant.lease)) throw std::invalid_argument("unverified Host grant or invalid binding/lease");
     grant_ = grant;
     lease_until_.store(tick_ms() + grant.lease.count());
-    worker_->start();
+    if (reconnect_prepared_) worker_->restart_after_disconnect();
+    else worker_->start();
+    reconnect_prepared_ = false;
     activated_ = true;
+}
+void SandboxRuntime::prepare_reconnect() {
+    stop(); // join before changing the lease/gate; no old callback can survive
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!activated_) throw std::logic_error("cannot reconnect before authentication");
+    activated_ = false; stopped_ = false; probe_ok_ = false;
+    lease_until_.store(0);
+    blocked_.store(false);
+    reconnect_prepared_ = true;
 }
 bool SandboxRuntime::renew_lease(const RequestContext& context, std::chrono::milliseconds lease) {
     std::lock_guard<std::mutex> lock(mutex_);

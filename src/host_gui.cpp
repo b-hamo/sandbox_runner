@@ -185,10 +185,12 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     DWORD result=ERROR_SUCCESS;
     if(!exporting) result=run_control_session(std::move(ctx),stop,&gui);
     else {
+      for (unsigned reconnects=0;;) {
+        std::optional<telemetry::ChannelCredential> next_credential;
         auto schema=std::make_shared<scrp::ArtifactExportSchema>(gui.schema());
         auto settings=ctx.connection;
         settings.endpoint=L"wss://"+address+L":"+std::to_wstring(port(b["port"]))+L"/scrp/v1/telemetry";
-        HostArtifactChannels channels(ctx.session,std::move(settings),std::move(artifacts),
+        HostArtifactChannels channels(ctx.session,std::move(settings),artifacts,
             gui.workspace().output.wstring(),schema,
             [&](std::function<void(const artifact::OutputChange&)> sink){monitor.attach(std::move(sink));},
             [&]{return monitor.healthy.load();});
@@ -209,7 +211,17 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         auto gui_hooks=gui.hooks();
         std::optional<::control::DeferredReply> held_terminate;
         ::control::Hooks hooks;
-        hooks.connected=[&](const scrp::Envelope& e){gui_hooks.connected(e);channels.connected(e);};
+        hooks.connected=[&](const scrp::Envelope& e){
+            // Receiver validated HELLO_ACK before this hook. Never reuse the
+            // consumed bootstrap/reconnect token on a new connection.
+            const auto& c=e.payload["channel_credentials"]["reconnect"];
+            auto next=control::util::utf8_to_wide(text(c["token"]));
+            require(bool(next),"Invalid reconnect credential");
+            telemetry::ChannelCredential fresh{L"Authorization",L"Bearer "+*next,utc(text(c["expires_at"]))};
+            telemetry::validate_credential(fresh);
+            gui_hooks.connected(e);channels.connected(e);
+            next_credential=std::move(fresh);
+        };
         hooks.poll=[&]{
             auto pending=gui_hooks.poll();
             std::vector<::control::DeferredReply> ready;
@@ -227,7 +239,7 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
             return ready;
         };
         hooks.disconnected=[&]{gui_hooks.disconnected();channels.block();};
-        ::control::Receiver receiver(std::move(ctx),std::move(handlers),{},telemetry::make_winhttp_websocket,std::move(hooks));
+        ::control::Receiver receiver(ctx,std::move(handlers),{},telemetry::make_winhttp_websocket,std::move(hooks));
         std::atomic<bool> cancelled{false},done{false};
         std::thread control_worker([&]{receiver.run(cancelled);done=true;});
         while(!done) {
@@ -236,11 +248,27 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
             if(wait==WAIT_FAILED){result=GetLastError();gui.block();cancelled=true;break;}
         }
         control_worker.join();
+        std::cout<<"Control receiver ended; transport_failure="<<receiver.snapshot().transport_failure
+                 <<" diagnostic="<<receiver.snapshot().diagnostic<<'\n'<<std::flush;
         if(artifact_stopper.joinable())artifact_stopper.join();
         channels.stop();gui.stop();
-        if(receiver.snapshot().state==::control::State::failed) {
+        const auto ended=receiver.snapshot();
+        if(ended.state==::control::State::failed && ended.transport_failure && next_credential &&
+           !terminating && reconnects<4 && WaitForSingleObject(stop,5000)==WAIT_TIMEOUT) {
+            telemetry::validate_credential(*next_credential);
+            credential=std::move(*next_credential);
+            ctx.credential=[credential]{return credential;};
+            gui.prepare_reconnect();
+            if(app_window) require(gui.startup_probe().ok,"Reconnect app capture failed");
+            ++reconnects;
+            std::cout<<"Control transport reconnect; action ledger retained, pending work not replayed\n"<<std::flush;
+            continue;
+        }
+        if(ended.state==::control::State::failed) {
             std::cerr<<receiver.snapshot().diagnostic<<'\n';result=ERROR_GEN_FAILURE;
         }
+        break;
+      }
     }
     monitor.finish();
     std::cout<<"Output monitor notifications="<<monitor.changes<<'\n';

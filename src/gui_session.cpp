@@ -269,4 +269,13 @@ void GuiSession::stop() {
     if (stopper_.joinable()) stopper_.join();
     else { runtime_.stop(); if (uploader_.joinable()) uploader_.join(); }
 }
+void GuiSession::prepare_reconnect() {
+    if (terminating_ || failed_) throw std::logic_error("terminated or failed GUI cannot reconnect");
+    stop();
+    runtime_.prepare_reconnect();
+    std::lock_guard<std::mutex> lock(mutex_);
+    uploads_.clear(); results_.clear();
+    cancelled_ = false;
+    stopped_ = false;
+}
 }

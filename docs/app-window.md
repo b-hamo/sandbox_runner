@@ -15,5 +15,12 @@ PrintWindow의 실제 PNG를 반환하며 2.5초 제한과 동시 1개 캡처 �
 전용 Win+R 실행 창. 전체 바탕화면, OS Run 창, 모든 단축키·앱·GPU 창·IME 조합을 지원한다고 주장하지 않는다.
 Job에 kill-on-close를 설정하지 않으므로 Runner 연결 종료만으로 앱을 죽이지 않는다.
 Runner 재시작 후 기존 앱 Job의 소유권 복구는 미구현이다.
+파일 반출을 사용하는 Host GUI 프로필은 전송 오류 때 HELLO_ACK에서 받은 미사용 reconnect 자격으로
+새 연결을 시도한다(최대 4회, 각 성공한 연결에서 새 자격을 받은 경우에만 다음 시도 가능).
+동일 Runner의 Runtime·앱 Job·action 기록은 유지하고, 이전 연결의 대기 작업·관찰 기준·미전달 결과는 버린다.
+새 HELLO_ACK와 lease, Host의 재동기화 전에는 입력을 허용하지 않는다. 토큰을 재사용하거나 입력을 재전송하지 않는다.
+프로토콜·정책 오류, 명시적 종료, 인증 만료는 이 재연결 대상이 아니다.
+수정본의 실제 중계 장애 복구는 아직 확인하지 못했다. `verification/reconnect_ledger_test.cpp`는
+중복/상충 입력, 이전 connection 거부, 전송/프로토콜 실패 분류를 대역으로 검사하며 실제 VM 연결 시험을 대신하지 않는다.
 프로세스 시작 ACK는 완료 증거가 아니며 앱 화면과 검사된 Router 영수증으로 확인한다.
 진단 stdout/stderr는 Guest C:\RunnerLogs에만 쓰며 명시된 로그/NUL 핸들만 자식에게 상속한다.
