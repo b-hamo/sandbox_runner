@@ -65,7 +65,9 @@ Host 기준은 #13과 동일한 `b-hamo/host_control` commit `fed305b06dfcfdced4
 ACK ACCEPTED는 접수만 의미한다. 빠른 Worker가 먼저 완료해도 ACK를 먼저 송신한 뒤 poll에서
 ACTION_RESULT를 보낸다. Receiver가 원 요청을 보존하여 correlation/task/action/session을 붙인다.
 송신 sequence는 ACK·관리 응답·비동기 결과 전체에서 단조 증가한다.
-Receiver의 기존 중복 action_id 거부 정책을 유지하며 재실행·자동 재연결하지 않는다.
+Receiver의 기존 중복 action_id 거부 정책을 유지하며 입력을 재실행하지 않는다.
+Receiver 자체는 단일 연결이다. 파일 반출을 사용하는 Host GUI 소유 계층의 제한된 재연결은
+[앱 창 계약](app-window.md)에 명시하며, action 기록을 유지한 채 새 자격으로만 연결한다.
 
 입력 SUCCESS는 Windows 입력 전달 성공이며 사용자 목표의 성공 판정이 아니다.
 `chars_sent`는 제공 모듈의 UTF-16 code unit 진행량이다(Unicode code point 개수와 다름).

@@ -31,5 +31,7 @@ bool enable_per_monitor_dpi_awareness();
 void primary_screen_size(int& width, int& height);
 
 CaptureResult capture_primary_display_png(const CaptureLimits& limits = {});
+// HWND is opaque here to keep the public header independent of Windows headers.
+CaptureResult capture_window_png(void* window, const CaptureLimits& limits = {});
 
 }  // namespace runner::control

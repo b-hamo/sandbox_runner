@@ -36,6 +36,7 @@ struct Snapshot {
     State state = State::idle;
     std::size_t dispatched = 0;
     std::string diagnostic; // fixed text only, never peer data or credentials
+    bool transport_failure = false; // protocol/policy failures never authorize reconnect
 };
 
 // Hooks run synchronously on the run() caller's thread and MUST return promptly.

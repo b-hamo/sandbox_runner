@@ -1,4 +1,5 @@
 #include "sandbox_runtime.h"
+#include "../control/app_window_backend.h"
 #include <stdexcept>
 
 namespace runner::runtime {
@@ -34,7 +35,8 @@ bool SandboxRuntime::matches(const RequestContext& context) const {
         context.connection_id == grant_.context.connection_id;
 }
 ErrorCode SandboxRuntime::gate() const {
-    if (config_.startup_authority == StartupAuthority::Host6055 &&
+    if ((config_.startup_authority == StartupAuthority::Host6055 ||
+         config_.startup_authority == StartupAuthority::HostAppWindow) &&
         (!config_.output_monitor_healthy || !config_.output_monitor_healthy())) blocked_.store(true);
     if (blocked_.load()) return ErrorCode::Cancelled;
     if (tick_ms() >= lease_until_.load()) {
@@ -61,7 +63,9 @@ void SandboxRuntime::activate(const HostGrant& grant) {
     if (activated_ || blocked_.load() || stopped_) throw std::logic_error("runtime cannot be reactivated");
     const bool startup_ok = config_.startup_authority == StartupAuthority::VerifiedGrant
         ? probe_ok_ && grant.startup_verified && grant.network_policy_verified && grant.required_monitoring_verified
-        : config_.startup_authority == StartupAuthority::Host6055 && !config_.worker.backend &&
+        : ((config_.startup_authority == StartupAuthority::Host6055 && !config_.worker.backend) ||
+           (config_.startup_authority == StartupAuthority::HostAppWindow && probe_ok_ &&
+            is_app_window_backend(config_.worker.backend))) &&
           config_.output_monitor_healthy && config_.output_monitor_healthy();
     if (!same(grant.context.binding, config_.binding) || grant.context.connection_id.empty() ||
         grant.context.connection_id.size() > 128 || grant.policy_version.empty() || grant.policy_version.size() > 128 ||
@@ -69,8 +73,19 @@ void SandboxRuntime::activate(const HostGrant& grant) {
         !valid_lease(grant.lease)) throw std::invalid_argument("unverified Host grant or invalid binding/lease");
     grant_ = grant;
     lease_until_.store(tick_ms() + grant.lease.count());
-    worker_->start();
+    if (reconnect_prepared_) worker_->restart_after_disconnect();
+    else worker_->start();
+    reconnect_prepared_ = false;
     activated_ = true;
+}
+void SandboxRuntime::prepare_reconnect() {
+    stop(); // join before changing the lease/gate; no old callback can survive
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!activated_) throw std::logic_error("cannot reconnect before authentication");
+    activated_ = false; stopped_ = false; probe_ok_ = false;
+    lease_until_.store(0);
+    blocked_.store(false);
+    reconnect_prepared_ = true;
 }
 bool SandboxRuntime::renew_lease(const RequestContext& context, std::chrono::milliseconds lease) {
     std::lock_guard<std::mutex> lock(mutex_);

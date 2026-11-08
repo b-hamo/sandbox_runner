@@ -1,5 +1,7 @@
 # sandbox_runner
 
+micro_VM 전용 `--surface app-window`: [동작·입력 범위·제한](docs/app-window.md).
+
 Windows Sandbox 내부에서 GUI 관찰·입력, 세션 Output 감시, Artifact 후보 보고 및 Host가 승인한 HTTPS 파일 전송을 수행하는 단일 C++ Runner다. Host의 MCP/Broker·승인·수신 검사·최종 반출과 연결하며 Runner는 파일 안전성을 판정하지 않는다.
 
 ## 실행 모드

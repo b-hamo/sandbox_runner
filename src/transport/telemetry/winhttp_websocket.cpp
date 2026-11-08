@@ -186,9 +186,14 @@ public:
         reading_=false;
         WINHTTP_WEB_SOCKET_STATUS read;
         { std::lock_guard<std::mutex> lock(socket_->mutex); read=socket_->read; }
-        check(read.eBufferType==WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE || read.eBufferType==WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE,
-              "WebSocket closed or non-text message received");
-        check(read.dwBytesTransferred<=read_buffer_.size() && read.dwBytesTransferred<=settings_.max_message_bytes-assembled_.size(),"WebSocket message exceeds limit");
+        check(read.eBufferType!=WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE,"WebSocket closed");
+        // Malformed frames are protocol failures, not permission to reconnect.
+        if(read.eBufferType!=WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE &&
+           read.eBufferType!=WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE)
+            throw std::runtime_error("WebSocket non-text message received");
+        if(read.dwBytesTransferred>read_buffer_.size() ||
+           read.dwBytesTransferred>settings_.max_message_bytes-assembled_.size())
+            throw std::runtime_error("WebSocket message exceeds limit");
         if(!fragment_active_) { fragment_started_=std::chrono::steady_clock::now(); fragment_active_=true; }
         assembled_.append(read_buffer_.data(),read.dwBytesTransferred);
         check(std::chrono::steady_clock::now()-fragment_started_<settings_.io_timeout,"WebSocket fragmented message timed out");

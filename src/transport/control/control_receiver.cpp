@@ -217,6 +217,11 @@ void Receiver::run(const std::atomic<bool>& stop) {
             ++sequence;
         }
         // Close before publishing a terminal state (also on exceptions).
+    } catch (const telemetry::SocketError&) {
+        state(stop ? State::stopped : State::failed, stop ? "" : diagnostic);
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.transport_failure = !stop;
+        return;
     } catch (...) {
         state(stop ? State::stopped : State::failed, stop ? "" : diagnostic);
         return;
