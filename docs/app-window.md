@@ -14,7 +14,7 @@ PrintWindow의 실제 PNG를 반환하며 2.5초 제한과 동시 1개 캡처 �
 지원 범위: Win32/WinForms 창의 왼쪽 클릭, 이동, Unicode 텍스트, 일부 제어 키와 Edit의 Ctrl+A,
 전용 Win+R 실행 창. 전체 바탕화면, OS Run 창, 모든 단축키·앱·GPU 창·IME 조합을 지원한다고 주장하지 않는다.
 Job에 kill-on-close를 설정하지 않으므로 Runner 연결 종료만으로 앱을 죽이지 않는다.
-Runner 재시작 후 기존 앱 Job의 소유권 복구는 미구현이다.
+앱 Job 재확보와 Manager/Host의 Runner 재시작 연결은 아래 후속 수정에 포함된다. 실제 프로세스 종료를 넣는 종단 검증 결과는 문서 끝에 기록한다.
 파일 반출을 사용하는 Host GUI 프로필은 전송 오류 때 HELLO_ACK에서 받은 미사용 reconnect 자격으로
 새 연결을 시도한다(최대 4회, 각 성공한 연결에서 새 자격을 받은 경우에만 다음 시도 가능).
 동일 Runner의 Runtime·앱 Job·action 기록은 유지하고, 이전 연결의 대기 작업·관찰 기준·미전달 결과는 버린다.
@@ -29,3 +29,38 @@ Host는 새 Control 연결에 묶인 Telemetry 자격을 검사하고 유휴 Out
 중복/상충 입력, 이전 connection 거부, 전송/프로토콜 실패 분류를 대역으로 검사하며 실제 VM 연결 시험과 구분한다.
 프로세스 시작 ACK는 완료 증거가 아니며 앱 화면과 검사된 Router 영수증으로 확인한다.
 진단 stdout/stderr는 Guest C:\RunnerLogs에만 쓰며 명시된 로그/NUL 핸들만 자식에게 상속한다.
+
+## 2026-11-09 후속 수정
+
+`artifact.reconnect.reset.v1`은 이전 전송 worker가 종료된 뒤 새 인증 Control 연결에서 Output snapshot
+재설정을 허용하는 협상이다. 기존 reconnect/반출 capability가 함께 있어야 한다. Host는 진행 중인 수신 종료를
+기다리고, 이전 upload grant를 재사용하지 않으며, 새 후보를 전부 수신·검사한다.
+실제 B에서 7,340,069바이트 중 61,324바이트 수신 후 연결을 끊었고 같은 VM/세대에서 재연결했다.
+불완전 후보는 취소 상태로 유지했고 새 후보를 SHA 일치 및 Defender 검사 후 반출했다. 기존 앱의 한글도 유지됐다.
+
+앱 Job은 세션 이름에 묶고 별도 controller event로 중복 제어자를 거부한다. 이름만 지정하면 마지막 Job 핸들이
+닫힌 뒤 OpenJobObject가 실패하므로, 동일 executable의 내부 `--app-job-keeper` 모드가 Job QUERY 핸들을 유지한다.
+상속 핸들은 Job 조회, 준비 event 통지, 원래 Runner의 종료 조회 세 개로 제한한다. keeper는 앱을 종료하지 않으며
+원래 Runner가 종료되고 Job 안에 앱도 없어지면 끝난다. PID 재조회나 controller event 유지로 다른 제어자를 막지 않는다.
+
+`verification/app_ownership_test.cpp`를 실제 WSB A에서 실행해 제어 프로세스 종료 후 앱 생존·동일 Job 재확보·한글 입력·
+다른 세션의 앱 미획득을 확인했다. SCRP RUN-0006의 GUEST_PROCESS_VERIFIED/exit 0과 검사 반출된 stdout을 보존했다.
+이것은 구성요소 시험이며 실제 B Runner를 종료하고 Host가 새 인증 세대로 재시작한 종단 시험은 아니다.
+새 Runner 빌드 SHA는 `3e717ac9b9beff113eb208793076c923379e28de20f8517140f648cb5bccae2c`이며,
+현재 B/C의 실행 바이너리 `c5fb9e5b78800612ae86a0e0e628945c303acc328b8f6a01b08521377850108c`와 구분한다.
+
+후속 복구 빌드 `e010e6f4d22f9b0470705bb51bbb0f290eb619eb4c0c6cd405e312b99ddbdd08`는
+bootstrap의 선택 필드 `output_storage_generation`을 지원한다(정수, 1 이상 현재 인증 generation 이하).
+생략하면 현재 generation을 사용한다. 재시작 때 인증·실행 디렉터리는 새 generation으로 만들고,
+Output만 최초 저장 generation에 고정해 살아 있는 앱이 저장하는 경로를 보존한다.
+기존 Output의 모든 조상 디렉터리를 재분석 지점 없이 고정하고 삭제 공유를 허용하지 않는다.
+이미 존재하는 새 실행 generation 또는 미래 저장 generation은 거부한다.
+이 계약은 해당 필드를 검증하는 Host/Runner를 함께 배포해야 하며 이전 Runner에 보내지 않는다.
+실제 WSB A의 RUN-0010에서 기존 Output 보존·디렉터리 이동 거부·generation 재사용 거부를 확인했다.
+이 구성요소 시험 통과만으로 micro_VM Runner 종료 후 종단 복구 성공을 의미하지 않는다.
+
+같은 후속 Runner 빌드의 실제 micro_VM 시험에서 PID 4764를 종료한 뒤 같은 VM에 PID 2488이 새 인증
+generation 2로 연결됐다. 기존 앱 PID 1056과 `복구 전 작업 유지` 텍스트를 유지했고 추가 한글 입력을 확인했다.
+종료 직전 Router 작업은 UNKNOWN으로 남아 재전송되지 않았고 새 Router 작업은 검증 영수증과 Defender 반출을 통과했다.
+앱 저장 버튼은 입력 전달 뒤 저장 파일이 생기지 않았다. 이를 버튼 저장 성공이나 모든 앱 입력 지원으로 일반화하지 않는다.
+기존 A/B/C는 READY를 유지했다. Host의 mixed-vm-hardening-20261109.md와 scrp-recovery3-20261109가 증거다.

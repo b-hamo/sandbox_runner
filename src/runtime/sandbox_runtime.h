@@ -50,6 +50,7 @@ public:
         // Host6055 uses the authenticated Broker as the input/startup authority.
         // file coverage means a live session Output watcher, not system-wide monitoring.
         std::function<bool()> output_monitor_healthy;
+        std::uint64_t output_storage_generation = 0; // trusted bootstrap only; action generation stays fresh
     };
     using ResultCallback = std::function<void(const RuntimeResult&)>;
     explicit SandboxRuntime(Config config);

@@ -1,3 +1,5 @@
+#define NOMINMAX
+#include <windows.h>
 #include "control/action_scheduler.h"
 #include "runtime/sandbox_runtime.h"
 #include "transport/control/control_receiver.h"
@@ -5,6 +7,7 @@
 #include <future>
 #include <iostream>
 #include <stdexcept>
+#include <fstream>
 using namespace runner::control;
 struct Backend : WorkerBackend {
     unsigned executions=0;
@@ -16,6 +19,28 @@ struct Backend : WorkerBackend {
     }
 };
 void check(bool value,const char* message) { if(!value)throw std::runtime_error(message); }
+void output_storage_recovery_test() {
+    using namespace runner::runtime;
+    const auto base=std::filesystem::temp_directory_path()/("scrp-output-recovery-"+scrp::uuid_v4());
+    std::filesystem::create_directory(base);
+    std::filesystem::path output;
+    {
+        SessionWorkspace old;
+        output=old.create(base,"SES-storage","RT-storage",1).output;
+        std::ofstream(output/"preserved.txt")<<"application state";
+    }
+    SessionWorkspace recovered;
+    const auto& paths=recovered.create(base,"SES-storage","RT-storage",2,1);
+    check(paths.output==output,"surviving app Output path changed");
+    check(paths.root.filename()==L"generation-2","action workspace reused old generation");
+    std::ifstream input(output/"preserved.txt");std::string contents;std::getline(input,contents);
+    check(contents=="application state","old Output file lost");
+    check(!MoveFileW(output.c_str(),(output.parent_path()/"moved").c_str()),"retained Output ancestor not pinned");
+    bool duplicate=false,future=false;
+    try { SessionWorkspace other;other.create(base,"SES-storage","RT-storage",2,1); } catch(const std::exception&) {duplicate=true;}
+    try { SessionWorkspace other;other.create(base,"SES-storage","RT-storage",3,4); } catch(const std::exception&) {future=true;}
+    check(duplicate && future,"unsafe Output/action generation reuse accepted");
+}
 void runtime_binding_test() {
     using namespace runner::runtime;
     auto backend=std::make_shared<Backend>();
@@ -61,18 +86,22 @@ void artifact_reconnect_contract_test() {
     for(bool opt_in:{false,true}) {
         scrp::ArtifactExportSchema schema(std::make_shared<TestSchema>(),opt_in);
         const auto hello=schema.hello(session);
-        bool advertised=false;
+        bool advertised=false,reset_advertised=false;
         for(const auto& cap:hello["capabilities"])if(cap=="artifact.reconnect.v1")advertised=true;
+        for(const auto& cap:hello["capabilities"])if(cap=="artifact.reconnect.reset.v1")reset_advertised=true;
         check(advertised==opt_in,"reconnect advertised without owning shutdown lifecycle");
-        for(int scenario=0;scenario<4;++scenario) {
+        check(reset_advertised==opt_in,"file reset advertised without owning shutdown lifecycle");
+        for(int scenario=0;scenario<6;++scenario) {
             schema.hello(session);
             scrp::Envelope ack;ack.type="HELLO_ACK";ack.sequence_number=1;ack.session=session;
             ack.correlation_id=scrp::uuid_v4();
             auto& caps=ack.payload["allowed_capabilities"];caps=Json::Value(Json::arrayValue);
             if(scenario!=1)caps.append("artifact.export.v1");
             if(scenario!=2)caps.append("artifact.output.v1");
-            caps.append("artifact.reconnect.v1");
+            if(scenario!=4)caps.append("artifact.reconnect.v1");
+            caps.append("artifact.reconnect.reset.v1");
             if(scenario==3)caps.append("artifact.reconnect.v1");
+            if(scenario==5)caps.append("artifact.reconnect.reset.v1");
             ack.payload["channel_credentials"]["telemetry"]["token"]=std::string(48,'a');
             ack.payload["channel_credentials"]["telemetry"]["expires_at"]="2099-01-01T00:00:00Z";
             bool accepted=false;
@@ -119,9 +148,10 @@ int main() {
     check(backend->executions==1,"input replayed");
     worker.stop();
     runtime_binding_test();
+    output_storage_recovery_test();
     failure_classification_test();
     artifact_reconnect_contract_test();
     std::cout<<"PASS: reconnect retains execution ledger; duplicate and conflicting input not replayed\n";
     return 0;
-  }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
+  }catch(const std::exception& error){std::cout<<error.what()<<'\n';return 1;}
 }

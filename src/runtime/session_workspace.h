@@ -18,7 +18,7 @@ public:
     SessionWorkspace& operator=(const SessionWorkspace&) = delete;
     const WorkspacePaths& create(const std::filesystem::path& trusted_guest_base,
                                  const std::string& session, const std::string& runtime,
-                                 unsigned long long generation);
+                                 unsigned long long generation, unsigned long long output_generation = 0);
     const WorkspacePaths& paths() const { return paths_; }
     static bool valid_id(const std::string& id);
 private:
