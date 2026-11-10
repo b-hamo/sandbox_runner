@@ -6,6 +6,7 @@
 #include "control_session.h"
 #include "gui_product.h"
 #include "host_gui.h"
+#include "control/app_job_keeper.h"
 #include <iostream>
 #include <cwchar>
 
@@ -67,6 +68,8 @@ void report_candidate(const artifact::CandidateStatus& status) {
 } // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
+    if (argc == 6 && std::wcscmp(argv[1], L"--app-job-keeper") == 0)
+        return runner::control::app_job_keeper(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 2 && std::wcscmp(argv[1], L"--help") == 0) {
         std::wcout << L"Usage: sandbox_runner.exe --session-context <local-context.json> [--output C:\\test-session\\Output]\n"
                    << L"   or: sandbox_runner.exe --control-context <control-context.json>\n"

@@ -1,15 +1,22 @@
 #include "app_window_backend.h"
 #include "control_util.h"
+#include "app_job_keeper.h"
 #include <windows.h>
 #include <stdexcept>
 #include <vector>
+#include <algorithm>
 
 namespace runner::control {
 namespace {
 constexpr UINT show_launch = WM_APP + 21;
+struct OwnedHandle {
+    HANDLE value = nullptr;
+    ~OwnedHandle() { if (value) CloseHandle(value); }
+};
 class AppWindowBackend final : public WorkerBackend {
     HWND panel_ = nullptr, edit_ = nullptr, button_ = nullptr, target_ = nullptr, focus_ = nullptr;
     HANDLE ready_ = nullptr, job_ = nullptr, target_process_ = nullptr;
+    OwnedHandle instance_, owned_job_;
     DWORD target_pid_ = 0;
     std::thread ui_;
     std::wstring title_;
@@ -152,10 +159,26 @@ class AppWindowBackend final : public WorkerBackend {
 public:
     void set_execution_gate(std::function<ErrorCode()> gate) override { gate_ = std::move(gate); }
     explicit AppWindowBackend(const std::string& session) {
+        // A fresh Runner can recover only the same session's existing Job.
+        // The instance event excludes two controllers even on the same thread.
+        // Neither handle is inherited by applications. A separate keeper retains
+        // a QUERY-only Job handle: its name otherwise vanishes on Runner exit.
+        if (session.empty() || session.size() > 80 ||
+            !std::all_of(session.begin(), session.end(), [](unsigned char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       (c >= '0' && c <= '9') || c == '-' || c == '_';
+            })) throw std::runtime_error("invalid app session identity");
+        const auto name = L"Local\\SCRP-App-" + util::utf8_to_wide(session).value();
+        instance_.value = CreateEventW(nullptr, TRUE, FALSE, (name + L"-controller").c_str());
+        if (!instance_.value || GetLastError() == ERROR_ALREADY_EXISTS)
+            throw std::runtime_error("app session already has a controller");
+        owned_job_.value = CreateJobObjectW(nullptr, (name + L"-processes").c_str());
+        job_ = owned_job_.value;
+        if (!job_) throw std::runtime_error("app ownership job unavailable");
+        retain_app_job(job_, util::utf8_to_wide(session).value());
         if (!enable_per_monitor_dpi_awareness()) throw std::runtime_error("app surface DPI awareness unavailable");
         title_ = L"SCRP app window - " + util::utf8_to_wide(session).value();
         ready_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        job_ = CreateJobObjectW(nullptr, nullptr);
         if (!ready_ || !job_) throw std::runtime_error("app surface handles unavailable");
         ui_ = std::thread([this] { ui_loop(); });
         WaitForSingleObject(ready_, INFINITE);
@@ -167,7 +190,8 @@ public:
         if (ui_.joinable()) ui_.join();
         if (target_process_) CloseHandle(target_process_);
         if (ready_) CloseHandle(ready_);
-        if (job_) CloseHandle(job_); // No kill-on-close: Runner disconnect must not terminate app work.
+        // owned_job_ closes without kill-on-close: a crashed Runner must not
+        // terminate applications. The next authenticated generation reopens it.
     }
     CaptureResult capture(const CaptureLimits& limits) override {
         if (!launch_visible_) EnumWindows(select_window, reinterpret_cast<LPARAM>(this));

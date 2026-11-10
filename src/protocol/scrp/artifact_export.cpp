@@ -171,7 +171,10 @@ Json::Value ArtifactExportSchema::hello(const SessionContext& session) const {
     check(std::find(payload["capabilities"].begin(),payload["capabilities"].end(),Json::Value(artifact_export_capability)) == payload["capabilities"].end());
     payload["capabilities"].append(artifact_export_capability);
     payload["capabilities"].append(output_snapshot_capability);
-    if (reconnect_) payload["capabilities"].append("artifact.reconnect.v1");
+    if (reconnect_) {
+        payload["capabilities"].append("artifact.reconnect.v1");
+        payload["capabilities"].append("artifact.reconnect.reset.v1");
+    }
     session_identity(session);
     std::lock_guard<std::mutex> lock(mutex_); session_ = session; connection_id_.clear(); negotiated_ = false; output_negotiated_ = false; telemetry_ = {};
     return payload;
@@ -183,15 +186,17 @@ std::string ArtifactExportSchema::hello_ack(const Envelope& e) const {
     const auto& allowed = e.payload["allowed_capabilities"];
     check(allowed.isArray() && allowed.size() <= 32);
     compatible.payload["allowed_capabilities"] = Json::Value(Json::arrayValue);
-    bool enabled = false, output_enabled = false, reconnect_enabled = false;
+    bool enabled = false, output_enabled = false, reconnect_enabled = false, reset_enabled = false;
     for (const auto& value : allowed) {
         if (value == artifact_export_capability) { check(!enabled); enabled = true; }
         else if (value == output_snapshot_capability) { check(!output_enabled); output_enabled = true; }
         else if (value == "artifact.reconnect.v1") { check(reconnect_ && !reconnect_enabled); reconnect_enabled = true; }
+        else if (value == "artifact.reconnect.reset.v1") { check(reconnect_ && !reset_enabled); reset_enabled = true; }
         else compatible.payload["allowed_capabilities"].append(value);
     }
     check(!output_enabled || enabled);
     check(!reconnect_enabled || (enabled && output_enabled));
+    check(!reset_enabled || (reconnect_enabled && output_enabled && enabled));
     // Existing schema still validates every other HELLO_ACK field/capability.
     const auto connection = delegate_->hello_ack(compatible);
     const auto& credential = e.payload["channel_credentials"]["telemetry"];

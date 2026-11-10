@@ -42,7 +42,7 @@ endif()
 # Imported Windows GUI executor + trusted SCRP adapter, in the same Runner EXE.
 add_library(runner_gui STATIC
     src/control/control_types.cpp src/control/control_util.cpp
-    src/control/screen_capture.cpp src/control/input_executor.cpp src/control/app_window_backend.cpp
+    src/control/screen_capture.cpp src/control/input_executor.cpp src/control/app_window_backend.cpp src/control/app_job_keeper.cpp
     src/control/action_scheduler.cpp src/runtime/session_workspace.cpp src/runtime/output_shortcut.cpp
     src/runtime/sandbox_runtime.cpp src/gui_session.cpp
     src/transport/observation/https_uploader.cpp)
@@ -53,6 +53,11 @@ target_link_libraries(runner_lifecycle PUBLIC runner_gui)
 
 option(RUNNER_BUILD_TESTS "Build explicit Windows Sandbox verification executables" OFF)
 if(RUNNER_BUILD_TESTS)
+    add_executable(app_ownership_test verification/app_ownership_test.cpp)
+    target_link_libraries(app_ownership_test PRIVATE runner_gui)
+    if(MINGW)
+        target_link_options(app_ownership_test PRIVATE -static -municode)
+    endif()
     add_executable(reconnect_ledger_test verification/reconnect_ledger_test.cpp)
     target_link_libraries(reconnect_ledger_test PRIVATE runner_gui)
     if(MINGW)

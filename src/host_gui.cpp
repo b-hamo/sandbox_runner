@@ -48,7 +48,8 @@ Json::Value bootstrap(const std::wstring& path) {
     const bool exporting=root.isMember("control_contract") || root.isMember("artifact_upload");
     require(!exporting || (root["control_contract"]=="artifact-export-v1" && root.isMember("artifact_upload")),
             "Artifact profile and upload settings must be selected together");
-    const auto expected_fields=fields.size()+(root.isMember("host_certificate_sha256") ? 1u : 0u)+(exporting ? 2u : 0u);
+    const auto expected_fields=fields.size()+(root.isMember("host_certificate_sha256") ? 1u : 0u)+(exporting ? 2u : 0u)
+        +(root.isMember("output_storage_generation") ? 1u : 0u);
     require(root.size()==expected_fields,"Unsupported Host bootstrap fields");
     for(const auto& f:fields)require(root.isMember(f),"Missing Host bootstrap field");
     require(root["bootstrap_version"]=="1.0" && root["path"]=="/scrp/v1/control", "Unsupported Host bootstrap version/path");
@@ -153,6 +154,13 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     Monitor monitor;
     runtime::SandboxRuntime::Config config;
     config.binding={ctx.session.session_id,ctx.session.runtime_id,ctx.session.generation};config.guest_workspace_base=base;
+    if (b.isMember("output_storage_generation")) {
+        const auto& storage = b["output_storage_generation"];
+        require((storage.type()==Json::uintValue || storage.type()==Json::intValue) && storage.isUInt64() &&
+                storage.asUInt64()>0 && storage.asUInt64()<=ctx.session.generation,
+                "Invalid Output storage generation");
+        config.output_storage_generation=storage.asUInt64();
+    }
     config.startup_authority=runtime::SandboxRuntime::StartupAuthority::Host6055;
     if(app_window) {
         config.worker.backend=control::make_app_window_backend(ctx.session.session_id);

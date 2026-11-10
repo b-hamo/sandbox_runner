@@ -24,7 +24,7 @@ SandboxRuntime::SandboxRuntime(Config config) : config_(std::move(config)) {
     if (!config_.worker.backend && !enable_per_monitor_dpi_awareness())
         throw std::runtime_error("per-monitor DPI awareness unavailable");
     workspace_.create(config_.guest_workspace_base, config_.binding.session_id,
-                      config_.binding.runtime_id, config_.binding.generation);
+                      config_.binding.runtime_id, config_.binding.generation, config_.output_storage_generation);
     config_.worker.generation = config_.binding.generation;
     config_.worker.execution_gate = [this] { return gate(); };
     worker_ = std::make_unique<ActionScheduler>(config_.worker);
