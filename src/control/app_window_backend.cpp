@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
+#include <cstdio>
 
 namespace runner::control {
 namespace {
@@ -13,6 +15,22 @@ struct OwnedHandle {
     HANDLE value = nullptr;
     ~OwnedHandle() { if (value) CloseHandle(value); }
 };
+void configure_builtin_apps() {
+    // Only the session's checked, read-only package is eligible. Do not look
+    // up a Host path or install/download an app in response to keyboard input.
+    wchar_t executable[32768]{};
+    const DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
+    if (!length || length >= 32768) throw std::runtime_error("Runner package path unavailable");
+    const auto folder = std::filesystem::path(executable).parent_path() / L"builtin-apps" / L"notepad";
+    if (!std::filesystem::is_regular_file(folder / L"notepad.exe")) return; // older Manager packages
+    DWORD needed = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+    std::vector<wchar_t> old_path(needed ? needed : 1, L'\0');
+    if (needed && !GetEnvironmentVariableW(L"PATH", old_path.data(), needed))
+        throw std::runtime_error("Guest application PATH unavailable");
+    const auto path = folder.wstring() + L";" + old_path.data();
+    if (!SetEnvironmentVariableW(L"PATH", path.c_str()))
+        throw std::runtime_error("Guest application PATH preparation failed");
+}
 class AppWindowBackend final : public WorkerBackend {
     HWND panel_ = nullptr, edit_ = nullptr, button_ = nullptr, target_ = nullptr, focus_ = nullptr;
     HANDLE ready_ = nullptr, job_ = nullptr, target_process_ = nullptr;
@@ -21,6 +39,7 @@ class AppWindowBackend final : public WorkerBackend {
     std::thread ui_;
     std::wstring title_;
     unsigned launch_serial_ = 0;
+    std::atomic<DWORD> launch_error_{ERROR_SUCCESS};
     bool launch_visible_ = false;
     std::function<ErrorCode()> gate_;
     static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
@@ -39,6 +58,7 @@ class AppWindowBackend final : public WorkerBackend {
             return 1;
         }
         if (message == WM_COMMAND && LOWORD(wp) == 101) {
+            self->launch_error_ = ERROR_SUCCESS;
             wchar_t text[4097]{};
             GetWindowTextW(self->edit_, text, 4097);
             // Keep actual child startup errors in this VM, rather than treating
@@ -50,8 +70,10 @@ class AppWindowBackend final : public WorkerBackend {
             SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
             HANDLE log = CreateFileW(log_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security,
                                      CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            const DWORD log_error = log == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
             HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                        &security, OPEN_EXISTING, 0, nullptr);
+            const DWORD input_error = input == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
             STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup);
             startup.StartupInfo.lpDesktop = const_cast<wchar_t*>(L"winsta0\\default");
             startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -70,20 +92,28 @@ class AppWindowBackend final : public WorkerBackend {
             const bool started = *text && prepared && CreateProcessW(nullptr, text, nullptr, nullptr, TRUE,
                 CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | EXTENDED_STARTUPINFO_PRESENT,
                 nullptr, nullptr, &startup.StartupInfo, &process);
+            const DWORD start_error = started ? ERROR_SUCCESS : !*text ? ERROR_INVALID_PARAMETER :
+                log_error ? log_error : input_error ? input_error : GetLastError();
             if (initialized) DeleteProcThreadAttributeList(startup.lpAttributeList);
             if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
             if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
             if (!started) {
-                SetWindowTextW(window, L"SCRP app launch failed; command was not started");
+                self->launch_error_ = start_error;
+                const auto title = L"SCRP app launch failed; Win32=" + std::to_wstring(start_error);
+                SetWindowTextW(window, title.c_str());
+                std::fprintf(stderr, "app launch failed at %s: Win32=%lu\n",
+                    prepared ? "CreateProcessW" : "startup preparation", static_cast<unsigned long>(start_error));
                 return 0;
             }
             if (!AssignProcessToJobObject(self->job_, process.hProcess)) {
+                self->launch_error_ = GetLastError();
                 TerminateProcess(process.hProcess, ERROR_ACCESS_DENIED);
                 CloseHandle(process.hThread); CloseHandle(process.hProcess);
                 SetWindowTextW(window, L"SCRP app launch failed: process ownership");
                 return 0;
             }
             const DWORD resumed = ResumeThread(process.hThread);
+            if (resumed == static_cast<DWORD>(-1)) self->launch_error_ = GetLastError();
             if (resumed == static_cast<DWORD>(-1)) TerminateProcess(process.hProcess, ERROR_GEN_FAILURE);
             CloseHandle(process.hThread); CloseHandle(process.hProcess);
             SetWindowTextW(window, resumed == static_cast<DWORD>(-1) ? L"SCRP app launch failed" : self->title_.c_str());
@@ -159,6 +189,7 @@ class AppWindowBackend final : public WorkerBackend {
 public:
     void set_execution_gate(std::function<ErrorCode()> gate) override { gate_ = std::move(gate); }
     explicit AppWindowBackend(const std::string& session) {
+        configure_builtin_apps();
         // A fresh Runner can recover only the same session's existing Job.
         // The instance event excludes two controllers even on the same thread.
         // Neither handle is inherited by applications. A separate keeper retains
@@ -239,7 +270,17 @@ public:
             case Operation::KeyboardPress: {
                 if (request.key == Key::Enter && target_ == panel_) {
                     DWORD_PTR started = 0;
-                    if (!message(panel_, WM_COMMAND, 101, 0, &started) || !started) return result;
+                    if (!message(panel_, WM_COMMAND, 101, 0, &started)) {
+                        result.status = ActionStatus::Unknown;
+                        result.error = ErrorCode::Timeout;
+                        result.message = "app launch response missing; do not replay input";
+                        return result;
+                    }
+                    if (!started) {
+                        result.error = ErrorCode::Internal;
+                        result.message = "app launch failed; Win32=" + std::to_string(launch_error_.load());
+                        return result;
+                    }
                     launch_visible_ = false;
                 } else {
                     UINT key = request.key == Key::Enter ? VK_RETURN : request.key == Key::Tab ? VK_TAB :

@@ -11,6 +11,16 @@ PrintWindow의 실제 PNG를 반환하며 2.5초 제한과 동시 1개 캡처 �
 입력은 화면 좌표를 해당 창의 자식 컨트롤로 변환하고 Unicode WM_CHAR로 전달한다.
 실행 게이트·취소·시간 제한을 글자마다 확인한다. 부분 전달은 재전송하지 않는다.
 
+Manager가 준비한 세션별 읽기 전용 `builtin-apps/notepad`가 Runner 옆에 있으면 자신의 PATH에
+추가한다. 전용 실행창과 자식 프로세스는 `notepad`/`notepad.exe`로 이 사본을 찾을 수 있다.
+Guest 준비 때의 파일 해시 검사는 Manager가 담당하며 Host Windows 폴더를 공유하지 않는다.
+프로그램 시작 실패는 일반 입력 거부와 구분해 내부 실행 오류 및 Win32 오류 번호를 남긴다.
+실행 응답 시간 초과는 UNKNOWN으로 남겨 입력이 전달되지 않았다고 단정하거나 재전송하지 않는다.
+2026-11-10 빌드 SHA-256 `07493a84a8eab91d60c398d398bab4cd4be9ec51687f43fa810884d0a0318c75`로
+실제 micro_VM에서 `notepad.exe` 실행 및 한글/영문 입력 화면을 확인했다.
+증거는 `C:\SCRPAppLab\notepad-auto2-20261110\15-obs-0.png`다.
+메모장 저장·반출과 일반 채팅 기본 배포 반영은 아직 검증하지 않았다.
+
 지원 범위: Win32/WinForms 창의 왼쪽 클릭, 이동, Unicode 텍스트, 일부 제어 키와 Edit의 Ctrl+A,
 전용 Win+R 실행 창. 전체 바탕화면, OS Run 창, 모든 단축키·앱·GPU 창·IME 조합을 지원한다고 주장하지 않는다.
 Job에 kill-on-close를 설정하지 않으므로 Runner 연결 종료만으로 앱을 죽이지 않는다.
