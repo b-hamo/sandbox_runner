@@ -1,6 +1,7 @@
 #include "app_window_backend.h"
 #include "control_util.h"
 #include "app_job_keeper.h"
+#include "app_shortcuts.h"
 #include <windows.h>
 #include <stdexcept>
 #include <vector>
@@ -171,7 +172,7 @@ class AppWindowBackend final : public WorkerBackend {
     }
     static BOOL CALLBACK select_window(HWND window, LPARAM context) {
         auto* self = reinterpret_cast<AppWindowBackend*>(context);
-        if (!IsWindowVisible(window) || IsIconic(window) || GetWindow(window, GW_OWNER) || window == self->panel_) return TRUE;
+        if (!IsWindowVisible(window) || !IsWindowEnabled(window) || IsIconic(window) || window == self->panel_) return TRUE;
         DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
         HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         BOOL owned = FALSE;
@@ -293,10 +294,13 @@ public:
                 break;
             }
             case Operation::KeyboardHotkey: {
-                wchar_t name[128]{}; GetClassNameW(focus_, name, 128);
-                if (request.key != Key::A || request.modifiers != std::vector<Modifier>{Modifier::Ctrl} ||
-                    (wcsstr(name, L"EDIT") == nullptr && wcsstr(name, L"Edit") == nullptr)) return result;
-                if (!message(focus_, EM_SETSEL, 0, -1)) return result;
+                const auto delivery = deliver_app_shortcut(target_, focus_, request, alive);
+                if (delivery == ShortcutDelivery::Unknown) {
+                    result.status = ActionStatus::Unknown; result.error = ErrorCode::Timeout;
+                    result.message = "app shortcut response missing; observe before further input; do not replay";
+                    return result;
+                }
+                if (delivery != ShortcutDelivery::Delivered) return result;
                 break;
             }
             case Operation::MouseClick:

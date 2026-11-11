@@ -19,9 +19,9 @@ Guest 준비 때의 파일 해시 검사는 Manager가 담당하며 Host Windows
 2026-11-10 빌드 SHA-256 `07493a84a8eab91d60c398d398bab4cd4be9ec51687f43fa810884d0a0318c75`로
 실제 micro_VM에서 `notepad.exe` 실행 및 한글/영문 입력 화면을 확인했다.
 증거는 `C:\SCRPAppLab\notepad-auto2-20261110\15-obs-0.png`다.
-메모장 저장·반출과 일반 채팅 기본 배포 반영은 아직 검증하지 않았다.
+당시에는 메모장 저장·반출과 일반 채팅 기본 배포 반영을 검증하지 않았다. 2026-11-11 결과는 아래 #43 절을 참조한다.
 
-지원 범위: Win32/WinForms 창의 왼쪽 클릭, 이동, Unicode 텍스트, 일부 제어 키와 Edit의 Ctrl+A,
+지원 범위: Win32/WinForms 창의 왼쪽 클릭, 이동, Unicode 텍스트, 일부 제어 키와 아래 메뉴/편집 단축키,
 전용 Win+R 실행 창. 전체 바탕화면, OS Run 창, 모든 단축키·앱·GPU 창·IME 조합을 지원한다고 주장하지 않는다.
 Job에 kill-on-close를 설정하지 않으므로 Runner 연결 종료만으로 앱을 죽이지 않는다.
 앱 Job 재확보와 Manager/Host의 Runner 재시작 연결은 아래 후속 수정에 포함된다. 실제 프로세스 종료를 넣는 종단 검증 결과는 문서 끝에 기록한다.
@@ -74,3 +74,40 @@ generation 2로 연결됐다. 기존 앱 PID 1056과 `복구 전 작업 유지` 
 종료 직전 Router 작업은 UNKNOWN으로 남아 재전송되지 않았고 새 Router 작업은 검증 영수증과 Defender 반출을 통과했다.
 앱 저장 버튼은 입력 전달 뒤 저장 파일이 생기지 않았다. 이를 버튼 저장 성공이나 모든 앱 입력 지원으로 일반화하지 않는다.
 기존 A/B/C는 READY를 유지했다. Host의 mixed-vm-hardening-20261109.md와 scrp-recovery3-20261109가 증거다.
+
+## 2026-11-11 앱 창 단축키 (#43)
+
+기존 `KeyboardHotkey`는 Win+R과 Ctrl+A만 처리해 메모장의 Ctrl+S를 INPUT_REJECTED로 거부했다.
+`app_shortcuts.cpp`는 소유 앱의 Win32 메뉴에서 탭 뒤에 표시된 단축키를 읽고 정확한 modifier 조합을
+일치시킨다. 메뉴 상태를 갱신한 뒤 accelerator 형식의 WM_COMMAND를 해당 창에 한 번 큐잉한다.
+메모장의 저장 명령 번호를 하드코딩하지 않는다. 이는 Windows의
+[메뉴와 accelerator 명령 처리](https://learn.microsoft.com/en-us/windows/win32/menurc/about-keyboard-accelerators)에 따른다.
+큐잉 성공은 입력 전달이며 저장 성공은 화면·파일로 따로 확인한다. Save As의 modal loop 때문에
+명령 완료를 SendMessageTimeout으로 기다리지 않는다. 메뉴 초기화/편집 메시지 응답이 끊기면 UNKNOWN이며 재전송하지 않는다.
+
+- 메뉴가 노출하는 Ctrl+S, Ctrl+Shift+S 등의 조합. Ctrl/Control, Shift, Alt, Win 표기와 영문 키 이름을 해석한다.
+- 메뉴에 없는 Ctrl+A/C/X/V/Z는 같은 소유 창의 표준 Edit/RichEdit 컨트롤에서 처리한다.
+- 비활성/중복/owner-draw 항목, 잘못된 modifier 조합, 다른 창의 focus, 취소·실행 게이트·시간 제한은 거부한다.
+- 메뉴 탐색은 깊이 8/512개로 제한한다. disabled owner를 제외하고 같은 Job의 활성 팝업도 캡처해 Save As를 관찰한다.
+- 사용자 정의 UI, GPU 창, 메뉴에 표시되지 않는 임의 단축키 및 모든 앱의 동작을 보장하지 않는다.
+
+`verification/app_shortcuts_test.cpp`는 실제 Guest에서 Ctrl+S 명령 ID/notification, 정확한 Shift 조합,
+disabled/중복 메뉴, 실행 게이트, modal owner, Ctrl+A/C/X/V/Z 내용, 외부/custom focus 거부를 검증했다.
+공식 빌드 스크립트로 Runner와 회귀 실행 파일을 만들고 테스트 실행 파일은 inbox_import로 들여왔다.
+Router RUN-0001은 GUEST_PROCESS_VERIFIED/exit 0으로 완료됐고 stdout은 검사 후 반출됐다.
+
+사용자 승인으로 이전 테스트 VM을 종료한 후 새 Runner로 같은 최신 main 기반 관리 서비스에 연결했다.
+실제 SCRP `computer_hotkey` Ctrl+A → GUI 한글·영문 입력 → Ctrl+S에서 ACT-000015 SUCCESS,
+메모장 제목의 미저장 표시 제거, 새 Output 후보 ART-000004, Defender EXPORTED를 확인했다.
+반출된 `ctrl-s-verified.txt`의 UTF-8 내용은 화면의 세 문단과 정확히 일치한다(160바이트).
+기존 WM_CHAR 경로는 CR/LF를 각각 처리하므로 이 시험의 CRLF 입력은 문단 사이 빈 줄로 저장됐다.
+Ctrl+Shift+S로 실제 Save As 창이 열리고 취소 후 원문으로 돌아왔다. 그 과정에서 Guest의
+`C:\Windows\System32\config\systemprofile\Desktop` 부재 경고가 나와 확인 버튼으로 닫았다.
+이 별도 Guest 프로필 문제는 이번 단축키 수정에서 해결하지 않았으며 Save As 파일 쓰기 성공으로 주장하지 않는다.
+
+배포 Runner: `C:\SCRPAppLab\shortcut-fix-20261111\bin\sandbox_runner.exe`
+(SHA-256 `0ac93c861f90444af65e8c51dc63ff35f3d542a686a163531cb30a28cc99c5ba`).
+기본 solution.json의 runner_exe/runner_sha256과 실제 검증 세션 바이너리가 일치하며 프로필 검증도 통과했다.
+세션 `SES-6f082df6fea145b7bf22f985ec9c5fa0`은 종료하지 않고 유지했다.
+증거: `C:\SCRPAppLab\shortcut-fix-20261111\verification-summary.json`, `run/019-0.png`(저장),
+`run/027-0.png`(Save As), `run/034-0.png`(원문 복귀).
