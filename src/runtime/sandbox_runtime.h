@@ -41,7 +41,7 @@ struct RuntimeSnapshot {
 
 class SandboxRuntime {
 public:
-    enum class StartupAuthority { VerifiedGrant, Host6055 };
+    enum class StartupAuthority { VerifiedGrant, Host6055, HostAppWindow };
     struct Config {
         SessionBinding binding;
         std::filesystem::path guest_workspace_base;
@@ -50,6 +50,7 @@ public:
         // Host6055 uses the authenticated Broker as the input/startup authority.
         // file coverage means a live session Output watcher, not system-wide monitoring.
         std::function<bool()> output_monitor_healthy;
+        std::uint64_t output_storage_generation = 0; // trusted bootstrap only; action generation stays fresh
     };
     using ResultCallback = std::function<void(const RuntimeResult&)>;
     explicit SandboxRuntime(Config config);
@@ -63,6 +64,7 @@ public:
     control::CaptureResult startup_probe();
     static std::vector<std::string> supported_capabilities() { return {"gui.observe", "gui.input"}; }
     void activate(const HostGrant& grant);
+    void prepare_reconnect(); // same in-memory generation; requires a fresh authenticated grant
     bool renew_lease(const RequestContext&, std::chrono::milliseconds lease);
     control::SubmitAck submit(const RequestContext&, const control::ActionRequest&, ResultCallback);
     std::optional<RuntimeResult> state(const RequestContext&, const std::string& action_id) const;
@@ -80,6 +82,7 @@ private:
     HostGrant grant_;
     bool activated_ = false, stopped_ = false;
     bool probe_ok_ = false;
+    bool reconnect_prepared_ = false;
     mutable std::atomic<bool> blocked_{false};
     std::atomic<std::int64_t> lease_until_{0};
     std::unique_ptr<control::ActionScheduler> worker_;

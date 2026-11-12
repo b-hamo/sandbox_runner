@@ -29,13 +29,16 @@ void SessionWorkspace::pin_directory(const fs::path& path) {
     try { handles_.push_back(h); } catch (...) { CloseHandle(h); throw; }
 }
 const WorkspacePaths& SessionWorkspace::create(const fs::path& base,
-        const std::string& session, const std::string& runtime, unsigned long long generation) {
+        const std::string& session, const std::string& runtime, unsigned long long generation,
+        unsigned long long output_generation) {
     if (!handles_.empty() || !paths_.root.empty()) throw std::logic_error("workspace is single-use");
     const auto native = base.native();
     if (!valid_id(session) || !valid_id(runtime) || !generation || !base.is_absolute() ||
         native.size() < 3 || native[1] != L':' || native.find(L':', 2) != std::wstring::npos ||
         native.find(L'\0') != std::wstring::npos || base != base.lexically_normal())
         throw std::invalid_argument("invalid workspace identity or non-local base path");
+    if (!output_generation) output_generation = generation;
+    if (output_generation > generation) throw std::invalid_argument("future Output generation rejected");
     if (GetDriveTypeW(base.root_path().c_str()) != DRIVE_FIXED)
         throw std::invalid_argument("workspace requires a local fixed Guest volume");
     fs::path current = base.root_path();
@@ -52,6 +55,15 @@ const WorkspacePaths& SessionWorkspace::create(const fs::path& base,
             throw std::runtime_error("cannot create workspace container");
         pin_directory(current);
     }
+    // Actions always get a fresh generation. Only Output may retain its original
+    // storage generation so surviving applications keep writing to the same path.
+    fs::path retained_output;
+    if (output_generation != generation) {
+        const auto previous = current / ("generation-" + std::to_string(output_generation));
+        pin_directory(previous);
+        retained_output = previous / "output";
+        pin_directory(retained_output);
+    }
     current /= "generation-" + std::to_string(generation);
     // An existing generation may contain actions executed by a crashed Runner.
     // Never silently reset the in-memory dedup ledger in that generation.
@@ -67,7 +79,7 @@ const WorkspacePaths& SessionWorkspace::create(const fs::path& base,
     paths_.temp = current / "temp";
     paths_.downloads = current / "downloads";
     paths_.workspace = current / "workspace";
-    paths_.output = current / "output";
+    paths_.output = retained_output.empty() ? current / "output" : retained_output;
     paths_.logs = current / "logs";
     return paths_;
 }

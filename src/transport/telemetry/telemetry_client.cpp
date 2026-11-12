@@ -65,7 +65,10 @@ struct TelemetryClient::Impl {
                 std::set<std::string> seen_ids,seen_nonces;
                 bool ready=false;
                 while(!stopping) {
-                    if(std::chrono::system_clock::now()>=credential.expires_at) throw std::runtime_error("Credential expired");
+                    // Bootstrap credentials admit a connection; they do not expire an
+                    // authenticated channel. Check expiry only during the handshake,
+                    // before CHANNEL_ACK binds the connection (as Control does).
+                    if(!ready && std::chrono::system_clock::now()>=credential.expires_at) throw std::runtime_error("Credential expired");
                     {
                         std::lock_guard<std::mutex> lock(mutex); expire_locked();
                         if(!inflight_event.empty()) {

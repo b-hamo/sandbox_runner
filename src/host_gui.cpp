@@ -1,4 +1,6 @@
 #include "host_gui.h"
+#include "control/app_window_backend.h"
+#include "runtime/output_shortcut.h"
 #include "gui_session.h"
 #include "artifact/output_watcher.h"
 #include "artifact_export_session.h"
@@ -46,7 +48,8 @@ Json::Value bootstrap(const std::wstring& path) {
     const bool exporting=root.isMember("control_contract") || root.isMember("artifact_upload");
     require(!exporting || (root["control_contract"]=="artifact-export-v1" && root.isMember("artifact_upload")),
             "Artifact profile and upload settings must be selected together");
-    const auto expected_fields=fields.size()+(root.isMember("host_certificate_sha256") ? 1u : 0u)+(exporting ? 2u : 0u);
+    const auto expected_fields=fields.size()+(root.isMember("host_certificate_sha256") ? 1u : 0u)+(exporting ? 2u : 0u)
+        +(root.isMember("output_storage_generation") ? 1u : 0u);
     require(root.size()==expected_fields,"Unsupported Host bootstrap fields");
     for(const auto& f:fields)require(root.isMember(f),"Missing Host bootstrap field");
     require(root["bootstrap_version"]=="1.0" && root["path"]=="/scrp/v1/control", "Unsupported Host bootstrap version/path");
@@ -97,7 +100,7 @@ struct Monitor {
     }
 };
 }
-DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address,HANDLE stop) {
+DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address,HANDLE stop,bool app_window) {
     require(stop && WaitForSingleObject(stop,0)==WAIT_TIMEOUT,"Host GUI startup cancelled");
     const auto b=bootstrap(file);
     std::wstring address=override_address;
@@ -151,11 +154,25 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
     Monitor monitor;
     runtime::SandboxRuntime::Config config;
     config.binding={ctx.session.session_id,ctx.session.runtime_id,ctx.session.generation};config.guest_workspace_base=base;
+    if (b.isMember("output_storage_generation")) {
+        const auto& storage = b["output_storage_generation"];
+        require((storage.type()==Json::uintValue || storage.type()==Json::intValue) && storage.isUInt64() &&
+                storage.asUInt64()>0 && storage.asUInt64()<=ctx.session.generation,
+                "Invalid Output storage generation");
+        config.output_storage_generation=storage.asUInt64();
+    }
     config.startup_authority=runtime::SandboxRuntime::StartupAuthority::Host6055;
+    if(app_window) {
+        config.worker.backend=control::make_app_window_backend(ctx.session.session_id);
+        config.worker.max_observations=1;
+        config.startup_authority=runtime::SandboxRuntime::StartupAuthority::HostAppWindow;
+    }
     config.output_monitor_healthy=[&]{return monitor.healthy.load();};
     GuiSession gui(config,[&](const scrp::Envelope& e){
         runtime::HostGrant grant;grant.context={config.binding,e.connection_id.asString()};
-        grant.policy_version="POL-0.1.0";grant.gui_observe=true;grant.gui_input=true;grant.lease=std::chrono::seconds(15);
+        // Keep this compatibility profile aligned with Host host/policy.py::POLICY_VERSION.
+        // POL-0.1.1 permits Win+R; SandboxRuntime still rejects mismatched request revisions.
+        grant.policy_version="POL-0.1.1";grant.gui_observe=true;grant.gui_input=true;grant.lease=std::chrono::seconds(15);
         return grant; // Host Broker owns startup/input admission; no invented verification bools.
     },[&](const scrp::Envelope& e,const control::Observation& png,const std::atomic<bool>& cancelled){
         observation::UploadGrant grant;grant.session=e.session;grant.connection_id=e.connection_id.asString();
@@ -164,15 +181,24 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         grant.max_bytes=8u*1024u*1024u;grant.max_pixels=16000000;
         return uploader.upload(grant,e,png,cancelled);
     });
+    if(app_window) {
+        require(gui.startup_probe().ok,"App-window startup capture failed");
+        std::cout<<"App-window session Output: "<<control::util::wide_to_utf8(gui.workspace().output.wstring())<<'\n';
+    } else {
+        const auto output_shortcut=runtime::create_output_shortcut(gui.workspace().output);
+        std::cout<<"Guest desktop Output shortcut ready: "<<control::util::wide_to_utf8(output_shortcut.wstring())<<'\n';
+    }
     monitor.start(gui.workspace().output.wstring(),stop);
     std::cout<<"Host GUI profile 6055cc6: Output monitor ready; Host owns startup/input admission\n"<<std::flush;
     DWORD result=ERROR_SUCCESS;
     if(!exporting) result=run_control_session(std::move(ctx),stop,&gui);
     else {
-        auto schema=std::make_shared<scrp::ArtifactExportSchema>(gui.schema());
+      for (unsigned reconnects=0;;) {
+        std::optional<telemetry::ChannelCredential> next_credential;
+        auto schema=std::make_shared<scrp::ArtifactExportSchema>(gui.schema(),true);
         auto settings=ctx.connection;
         settings.endpoint=L"wss://"+address+L":"+std::to_wstring(port(b["port"]))+L"/scrp/v1/telemetry";
-        HostArtifactChannels channels(ctx.session,std::move(settings),std::move(artifacts),
+        HostArtifactChannels channels(ctx.session,std::move(settings),artifacts,
             gui.workspace().output.wstring(),schema,
             [&](std::function<void(const artifact::OutputChange&)> sink){monitor.attach(std::move(sink));},
             [&]{return monitor.healthy.load();});
@@ -182,6 +208,7 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         std::thread artifact_stopper;
         bool terminating=false;
         handlers["ARTIFACT_REQUEST"]=[&](const scrp::Envelope& e){return channels.handle(e);};
+        handlers["OUTPUT_SNAPSHOT_REQUEST"]=[&](const scrp::Envelope& e){return channels.handle(e);};
         handlers["TERMINATE"]=[&](const scrp::Envelope& e){
             if(!terminating) {
                 terminating=true;channels.block();
@@ -192,7 +219,17 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
         auto gui_hooks=gui.hooks();
         std::optional<::control::DeferredReply> held_terminate;
         ::control::Hooks hooks;
-        hooks.connected=[&](const scrp::Envelope& e){gui_hooks.connected(e);channels.connected(e);};
+        hooks.connected=[&](const scrp::Envelope& e){
+            // Receiver validated HELLO_ACK before this hook. Never reuse the
+            // consumed bootstrap/reconnect token on a new connection.
+            const auto& c=e.payload["channel_credentials"]["reconnect"];
+            auto next=control::util::utf8_to_wide(text(c["token"]));
+            require(bool(next),"Invalid reconnect credential");
+            telemetry::ChannelCredential fresh{L"Authorization",L"Bearer "+*next,utc(text(c["expires_at"]))};
+            telemetry::validate_credential(fresh);
+            gui_hooks.connected(e);channels.connected(e);
+            next_credential=std::move(fresh);
+        };
         hooks.poll=[&]{
             auto pending=gui_hooks.poll();
             std::vector<::control::DeferredReply> ready;
@@ -210,7 +247,7 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
             return ready;
         };
         hooks.disconnected=[&]{gui_hooks.disconnected();channels.block();};
-        ::control::Receiver receiver(std::move(ctx),std::move(handlers),{},telemetry::make_winhttp_websocket,std::move(hooks));
+        ::control::Receiver receiver(ctx,std::move(handlers),{},telemetry::make_winhttp_websocket,std::move(hooks));
         std::atomic<bool> cancelled{false},done{false};
         std::thread control_worker([&]{receiver.run(cancelled);done=true;});
         while(!done) {
@@ -219,11 +256,27 @@ DWORD run_host_gui(const std::wstring& file,const std::wstring& override_address
             if(wait==WAIT_FAILED){result=GetLastError();gui.block();cancelled=true;break;}
         }
         control_worker.join();
+        std::cout<<"Control receiver ended; transport_failure="<<receiver.snapshot().transport_failure
+                 <<" diagnostic="<<receiver.snapshot().diagnostic<<'\n'<<std::flush;
         if(artifact_stopper.joinable())artifact_stopper.join();
         channels.stop();gui.stop();
-        if(receiver.snapshot().state==::control::State::failed) {
+        const auto ended=receiver.snapshot();
+        if(ended.state==::control::State::failed && ended.transport_failure && next_credential &&
+           !terminating && reconnects<4 && WaitForSingleObject(stop,5000)==WAIT_TIMEOUT) {
+            telemetry::validate_credential(*next_credential);
+            credential=std::move(*next_credential);
+            ctx.credential=[credential]{return credential;};
+            gui.prepare_reconnect();
+            if(app_window) require(gui.startup_probe().ok,"Reconnect app capture failed");
+            ++reconnects;
+            std::cout<<"Control transport reconnect; action ledger retained, pending work not replayed\n"<<std::flush;
+            continue;
+        }
+        if(ended.state==::control::State::failed) {
             std::cerr<<receiver.snapshot().diagnostic<<'\n';result=ERROR_GEN_FAILURE;
         }
+        break;
+      }
     }
     monitor.finish();
     std::cout<<"Output monitor notifications="<<monitor.changes<<'\n';

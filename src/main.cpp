@@ -6,6 +6,7 @@
 #include "control_session.h"
 #include "gui_product.h"
 #include "host_gui.h"
+#include "control/app_job_keeper.h"
 #include <iostream>
 #include <cwchar>
 
@@ -67,6 +68,8 @@ void report_candidate(const artifact::CandidateStatus& status) {
 } // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
+    if (argc == 6 && std::wcscmp(argv[1], L"--app-job-keeper") == 0)
+        return runner::control::app_job_keeper(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 2 && std::wcscmp(argv[1], L"--help") == 0) {
         std::wcout << L"Usage: sandbox_runner.exe --session-context <local-context.json> [--output C:\\test-session\\Output]\n"
                    << L"   or: sandbox_runner.exe --control-context <control-context.json>\n"
@@ -84,6 +87,7 @@ int wmain(int argc, wchar_t* argv[]) {
     std::wstring bootstrap_path, host_address;
     std::wstring output_path = runner::default_output_path;
     bool supplied_output = false;
+    std::wstring surface;
     for (int i = 1; i < argc; i += 2) {
         if (i + 1 < argc && std::wcscmp(argv[i], L"--session-context") == 0 && context_path.empty()) {
             context_path = argv[i + 1];
@@ -93,6 +97,8 @@ int wmain(int argc, wchar_t* argv[]) {
             bootstrap_path = argv[i + 1];
         } else if (i + 1 < argc && std::wcscmp(argv[i], L"--host-address") == 0 && host_address.empty()) {
             host_address = argv[i + 1];
+        } else if (i + 1 < argc && std::wcscmp(argv[i], L"--surface") == 0 && surface.empty()) {
+            surface = argv[i + 1];
         } else if (i + 1 < argc && std::wcscmp(argv[i], L"--output") == 0 && !supplied_output) {
             output_path = argv[i + 1];
             supplied_output = true;
@@ -101,7 +107,8 @@ int wmain(int argc, wchar_t* argv[]) {
             return 2;
         }
     }
-    if (int(!context_path.empty()) + int(!control_path.empty()) + int(!bootstrap_path.empty()) != 1 ||
+    if ((!surface.empty() && (bootstrap_path.empty() || (surface != L"desktop" && surface != L"app-window"))) ||
+        int(!context_path.empty()) + int(!control_path.empty()) + int(!bootstrap_path.empty()) != 1 ||
         (supplied_output && context_path.empty()) || (!host_address.empty() && bootstrap_path.empty())) {
         std::cerr << "Choose one session, management Control or Host bootstrap mode; use --help.\n";
         return 2;
@@ -122,7 +129,7 @@ int wmain(int argc, wchar_t* argv[]) {
     DWORD result = ERROR_GEN_FAILURE;
     try {
         if (!bootstrap_path.empty()) {
-            result = runner::run_host_gui(bootstrap_path, host_address, stop_event);
+            result = runner::run_host_gui(bootstrap_path, host_address, stop_event, surface == L"app-window");
         } else if (!control_path.empty()) {
             result = runner::run_product_control_session(runner::load_control_context(control_path), stop_event);
         } else {

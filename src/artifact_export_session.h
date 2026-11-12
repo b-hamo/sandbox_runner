@@ -1,5 +1,6 @@
 #pragma once
 #include "candidate_telemetry.h"
+#include "artifact/output_snapshot.h"
 #include "protocol/scrp/artifact_export.h"
 #include <condition_variable>
 #include <deque>
@@ -31,6 +32,7 @@ public:
     // restore old candidates or grants. Called by the owner on Telemetry loss.
     void set_healthy(bool healthy) noexcept;
     ::control::Replies handle(const scrp::Envelope&);
+    ::control::Replies snapshot(const scrp::Envelope&);
     std::vector<::control::DeferredReply> poll();
     void block() noexcept; // no join/I/O; cancels active/pending work
     void stop(); // owner/stopper thread only; block + join
@@ -40,6 +42,7 @@ private:
         std::wstring path;
         unsigned long long generation = 0;
         artifact::FileObservation observation{};
+        bool snapshot = false;
     };
     struct Job {
         std::string correlation_id;
@@ -56,6 +59,8 @@ private:
     bool registered(const std::string&, const Candidate&) const;
     void run() noexcept;
     scrp::ArtifactTransferResult transfer(Job&);
+    ::control::Reply snapshot_work(const scrp::Envelope&);
+    void release_snapshot_locked();
     void cancel_locked(scrp::ArtifactError) noexcept;
     void invalidate_locked(const CandidateObservation&,
         const artifact::CandidateStatus&) noexcept;
@@ -71,6 +76,10 @@ private:
     std::map<std::string, Candidate> candidates_;
     std::set<std::string> used_upload_ids_;
     std::optional<Job> pending_;
+    std::optional<scrp::Envelope> pending_snapshot_;
+    std::optional<::control::DeferredReply> completed_snapshot_;
+    std::unique_ptr<artifact::OutputSnapshot> snapshot_;
+    std::string snapshot_id_;
     std::deque<Completion> completed_;
     std::string active_event_id_;
     bool busy_ = false, healthy_ = true, closing_ = false;

@@ -34,6 +34,7 @@ namespace runner::control {
 class WorkerBackend {
 public:
     virtual ~WorkerBackend() = default;
+    virtual void set_execution_gate(std::function<ErrorCode()> gate) { (void)gate; }
     virtual CaptureResult capture(const CaptureLimits&) = 0;
     virtual void screen_size(int& width, int& height) = 0;
     virtual ExecOutcome input(const ActionRequest&, std::chrono::steady_clock::time_point,
@@ -67,6 +68,7 @@ public:
 
     void start();
     void stop();
+    void restart_after_disconnect(); // owner only, joined worker; retains action ledger
     // Nonblocking: closes admission and cooperatively cancels current input.
     // Host must kill the Runner process for a stuck OS call / emergency stop.
     std::size_t request_stop(); // number of queued jobs newly cancelled

@@ -9,6 +9,11 @@
 #include <wincodec.h>
 
 #include <cstring>
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <thread>
 
 namespace runner::control {
 
@@ -72,10 +77,14 @@ void primary_screen_size(int& width, int& height) {
     height = GetSystemMetrics(SM_CYSCREEN);
 }
 
-CaptureResult capture_primary_display_png(const CaptureLimits& limits) {
+static CaptureResult capture_surface(HWND window, const CaptureLimits& limits) {
     CaptureResult r;
     int w = 0, h = 0;
-    primary_screen_size(w, h);
+    if (window) {
+        RECT rect{};
+        if (!GetWindowRect(window, &rect)) { r.error = "app window unavailable"; return r; }
+        w = rect.right - rect.left; h = rect.bottom - rect.top;
+    } else primary_screen_size(w, h);
     if (w <= 0 || h <= 0) { r.error = "screen size unavailable"; return r; }
     if (static_cast<std::uint64_t>(w) * static_cast<std::uint64_t>(h) > limits.max_pixels) {
         r.error = "screen exceeds pixel limit";
@@ -98,7 +107,9 @@ CaptureResult capture_primary_display_png(const CaptureLimits& limits) {
     bool blit_ok = false;
     if (dib && bits) {
         HGDIOBJ old = SelectObject(mem, dib);
-        blit_ok = BitBlt(mem, 0, 0, w, h, screen, 0, 0, SRCCOPY | CAPTUREBLT) != FALSE;
+        if (window) {
+            blit_ok = PrintWindow(window, mem, 2 /* PW_RENDERFULLCONTENT */) != FALSE;
+        } else blit_ok = BitBlt(mem, 0, 0, w, h, screen, 0, 0, SRCCOPY | CAPTUREBLT) != FALSE;
         SelectObject(mem, old);
         GdiFlush();
     }
@@ -195,6 +206,36 @@ CaptureResult capture_primary_display_png(const CaptureLimits& limits) {
     r.width = w;
     r.height = h;
     return r;
+}
+
+CaptureResult capture_primary_display_png(const CaptureLimits& limits) { return capture_surface(nullptr, limits); }
+CaptureResult capture_window_png(void* window, const CaptureLimits& limits) {
+    if (!window) { CaptureResult result; result.error = "missing app window"; return result; }
+    // PrintWindow is synchronous and may hang in another process. Own every
+    // buffer/DC on one isolated worker; allow only one in flight even after a
+    // timeout. Never free resources that an overrunning renderer still uses.
+    static std::atomic<bool> busy{false};
+    if (busy.exchange(true)) { CaptureResult result; result.error = "app capture already in progress"; return result; }
+    struct Pending { std::mutex mutex; std::condition_variable done; bool finished = false; CaptureResult result; };
+    auto pending = std::make_shared<Pending>();
+    try {
+        std::thread([pending, window, limits] {
+            CaptureResult result;
+            try { result = capture_surface(static_cast<HWND>(window), limits); }
+            catch (...) { result.error = "app capture failed"; }
+            {
+                std::lock_guard<std::mutex> lock(pending->mutex);
+                pending->result = std::move(result); pending->finished = true;
+            }
+            busy.store(false);
+            pending->done.notify_one();
+        }).detach();
+    } catch (...) { busy.store(false); throw; }
+    std::unique_lock<std::mutex> lock(pending->mutex);
+    if (!pending->done.wait_for(lock, std::chrono::milliseconds(2500), [&] { return pending->finished; })) {
+        CaptureResult result; result.error = "app capture timed out; renderer remains isolated"; return result;
+    }
+    return std::move(pending->result);
 }
 
 }  // namespace runner::control

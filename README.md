@@ -1,5 +1,7 @@
 # sandbox_runner
 
+micro_VM 전용 `--surface app-window`: [동작·입력 범위·제한](docs/app-window.md).
+
 Windows Sandbox 내부에서 GUI 관찰·입력, 세션 Output 감시, Artifact 후보 보고 및 Host가 승인한 HTTPS 파일 전송을 수행하는 단일 C++ Runner다. Host의 MCP/Broker·승인·수신 검사·최종 반출과 연결하며 Runner는 파일 안전성을 판정하지 않는다.
 
 ## 실행 모드
@@ -16,6 +18,12 @@ Windows Sandbox 내부에서 GUI 관찰·입력, 세션 Output 감시, Artifact 
 
 Host bootstrap 모드의 Output은 `C:\RunnerWorkspace\Sessions\session-<session_id>\runtime-<runtime_id>\generation-<generation>\output`이다. 독립 모드 기본값은 `C:\RunnerWorkspace\Output`이다. 모두 Guest 내부 폴더이며 Host에 쓰기 가능한 공유 Output을 만들지 않는다. 경로·기존 파일을 요청에서 임의로 재지정하지 않는다.
 
+Host bootstrap 모드는 바탕화면에 **Output 바로가기**를 생성해 위 세션 폴더를 연다.
+바로가기는 실제 폴더가 아니므로 `Desktop\Output\파일명`을 경로 문자열로 조합하지 않는다.
+`artifact.output.v1` 협상 시 전체 파일 목록 잠금·SHA-256·종료 전 확보를 지원한다.
+Host #105와 함께 적용하며, 검사와 사용자 최종 승인 전에는 Host 다운로드에 공개하지 않는다.
+[종료 전 Output 확보 계약](docs/output-snapshot-v1.md).
+
 ## Artifact 반출
 
 파일 생성 → 안정화 → `SECURITY_EVENT(ARTIFACT_CANDIDATE)` → Host 후보 등록/승인 → `ARTIFACT_REQUEST` → 현재 후보·핸들 재검증 → HTTPS PUT → `ARTIFACT_RESULT` 순서다. 후보에는 event_id·관찰 시각·상대 경로만 보고하며 파일 바이트·해시는 넣지 않는다.
@@ -29,6 +37,25 @@ Host가 비공개 수신 파일의 크기·SHA-256을 계산하고 HTTP 완료�
 [Host 구현 계약·Schema·체크리스트](docs/artifact-export-contract.md), [Runner 구현·검증·제한](docs/artifact-export-implementation.md), [현재 구조](docs/project-structure.md)를 따른다.
 
 ## Host 빌드와 배포
+
+통합 설치기와 개발자는 일반 PowerShell에서 같은 빌드 진입점을 사용할 수 있다.
+
+```powershell
+.\scripts\build.ps1 -UcrtRoot C:\msys64\ucrt64 -CheckOnly
+.\scripts\build.ps1 -UcrtRoot C:\msys64\ucrt64
+```
+
+`-UcrtRoot` 생략 시 `MSYS2_ROOT/ucrt64`, PATH의 UCRT64 CMake, `C:\msys64\ucrt64`
+순으로 찾는다. UCRT64의 gcc/cmake/ninja/jsoncpp가 필요하며 도구 설치나 OS 설정은
+이 스크립트가 변경하지 않는다. 기존 `build/` 캐시와 분리한 `build/solution`에 빌드한다.
+성공하면 `sandbox_runner.exe`와 `build-info.json`(schema_version=1, executable,
+sha256, source, commit, dirty, ucrt_root, compiler, built_at, dll_imports)을 제공한다.
+빌드 시작 시 이전 영수증을 무효화하고 실패 시 0이 아닌 종료 코드를 반환한다.
+Host는 영수증의 경로와 실제 EXE 해시를 확인한 뒤 연결한다. 영수증은 빌드 기록이며
+보안 판정이나 Host 프로토콜 호환성 증명은 아니다. 실제 READY 검증이 별도로 필요하다.
+
+UCRT64 binutils의 한글 절대 경로 문제를 피하기 위해 DLL 검사는 빌드 폴더에서
+상대 파일명으로 수행한다. 기존 사용자 소스·다른 빌드 폴더를 삭제하지 않는다.
 
 Windows x64 **MSYS2 UCRT64** GCC/CMake/Ninja와 JsonCpp를 같은 환경에서 사용한다. 현재 GUI 기반의 C++17 요구 및 JsonCpp 정적 연결을 유지한다. 도구 버전은 팀에서 새로 동결하지 않는다.
 

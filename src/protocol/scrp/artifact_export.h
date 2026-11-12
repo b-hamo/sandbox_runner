@@ -6,7 +6,12 @@
 namespace scrp {
 constexpr const char* artifact_export_contract = "artifact-export-v1";
 constexpr const char* artifact_export_capability = "artifact.export.v1";
+constexpr const char* output_snapshot_capability = "artifact.output.v1";
 constexpr std::uint64_t artifact_max_bytes = 52428800;
+constexpr std::uint64_t output_snapshot_max_bytes = 209715200;
+// Keep the complete manifest below the Control channel's 64 KiB envelope limit.
+constexpr std::size_t output_manifest_max_bytes = 49152;
+void validate_output_snapshot_request(const Envelope&);
 
 struct ArtifactUploadRequest {
     std::string candidate_event_id, upload_id, upload_token;
@@ -32,7 +37,7 @@ control::Reply artifact_result_reply(const ArtifactUploadRequest&, ArtifactTrans
 // HELLO_ACK's credentials become available only after full validation.
 class ArtifactExportSchema final : public control::Schema {
 public:
-    explicit ArtifactExportSchema(std::shared_ptr<const control::Schema> delegate);
+    explicit ArtifactExportSchema(std::shared_ptr<const control::Schema> delegate, bool reconnect = false);
     Json::Value hello(const SessionContext&) const override;
     std::string hello_ack(const Envelope&) const override;
     void validate_request(const Envelope&) const override;
@@ -42,10 +47,12 @@ public:
     telemetry::ChannelCredential telemetry_credential() const;
 private:
     std::shared_ptr<const control::Schema> delegate_;
+    bool reconnect_ = false;
     mutable std::mutex mutex_;
     mutable SessionContext session_;
     mutable std::string connection_id_;
     mutable bool negotiated_ = false;
+    mutable bool output_negotiated_ = false;
     mutable telemetry::ChannelCredential telemetry_;
 };
 

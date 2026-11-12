@@ -8,6 +8,11 @@ Runner는 Windows 격리 환경에서 GUI 실행·관찰, 세션 내부 Output �
 
 ## 현재 파일 구조
 
+`scripts/build.ps1`은 Host 통합 설치기와 개발자가 공유하는 Windows UCRT64 빌드
+진입점이다. 기존 제품 CMake target을 빌드하고 `build/solution/build-info.json`에
+실행 파일 경로·SHA-256·소스 상태·도구 정보를 기록한다. Sandbox 기동, 서비스 설치,
+최종 파일 검사는 Host의 책임이며 이 스크립트는 수행하지 않는다.
+
 ```text
 src/
 ├─ main.cpp / runner_paths.h

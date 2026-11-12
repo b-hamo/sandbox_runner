@@ -40,7 +40,10 @@ Issue #21에서 Host PR #23/#25 (`b08a74d`)가 추가한 bootstrap 인증서 SHA
   `Host6055` 프로필에서는 **Host Broker가 시작 검증 및 입력 요청 발행을 책임진다**.
   존재하지 않는 시작 승인 메시지나 network/startup verified 값을 만들어 보내지 않는다.
 - Host의 STATE → OBSERVE → HEARTBEAT 검사에 응답하고 Host가 READY 이후 보내는 Action을 수행한다.
-  현재 Host 정책 `POL-0.1.0`과 초기 15초 lease를 적용하고 HEARTBEAT로 갱신한다.
+  현재 Host 정책 `POL-0.1.1`(Win+R 허용)과 초기 15초 lease를 적용하고 HEARTBEAT로 갱신한다.
+  정책 버전은 아직 wire에서 협상하지 않는 호환 프로필 상수다. Host의
+  `host/policy.py::POLICY_VERSION` 변경 시 `src/host_gui.cpp`도 함께 맞추고 통합 CI로 검증한다.
+  요청의 정책 버전이 세션에 설정된 버전과 다르면 기존대로 거부한다.
   기존 VerifiedGrant 내부 주입 경로의 사전 검증 조건은 유지한다.
 - 세션·세대·connection·task·action·관찰 좌표 바인딩, 연결 단절/lease 만료/종료 차단을 유지한다.
   Output 건강 상태가 회복되어도 이미 차단된 세션을 자동 재활성화하지 않는다.
