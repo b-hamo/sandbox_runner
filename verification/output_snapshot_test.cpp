@@ -7,6 +7,80 @@
 
 namespace fs=std::filesystem;
 void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+bool starts_with(const std::string& text,const std::string& prefix){return text.rfind(prefix,0)==0;}
+// Writes a whole stream, e.g. "file.txt:Zone.Identifier" as a browser does for MOTW.
+void write_stream(const std::wstring& path,const std::string& text) {
+    const auto h=CreateFileW(path.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,0,nullptr);
+    check(h!=INVALID_HANDLE_VALUE,"stream test setup failed");
+    DWORD written=0;
+    const bool ok=WriteFile(h,text.data(),static_cast<DWORD>(text.size()),&written,nullptr)!=FALSE;
+    CloseHandle(h);
+    check(ok && written==text.size(),"stream test write failed");
+}
+// A file with a Zone.Identifier stream still refuses the whole capture, but the
+// failure names that file and stream. Removing the stream makes capture succeed.
+void motw_test(const fs::path& root) {
+    const auto motw=root/L"minobox_export_test.txt";
+    write_stream(motw.wstring(),"exported by browser");
+    write_stream(motw.wstring()+L":Zone.Identifier","[ZoneTransfer]\r\nZoneId=3\r\n");
+    {
+        artifact::OutputSnapshot snapshot(root.wstring());
+        check(snapshot.capture(1024,2048)==ERROR_NOT_SUPPORTED,"MOTW stream accepted");
+        check(snapshot.files().empty(),"MOTW refusal exposed a partial manifest");
+        const auto& failure=snapshot.failure();
+        check(failure.reason && std::string(failure.reason)=="STREAMS_NOT_SUPPORTED","MOTW reason missing");
+        check(failure.relative_path==L"minobox_export_test.txt","MOTW path missing");
+        check(failure.stream==L"Zone.Identifier","MOTW stream name missing");
+        const auto problem=artifact::capture_problem(failure);
+        check(starts_with(problem,"OUTPUT_UNAVAILABLE: STREAMS_NOT_SUPPORTED path=\"minobox_export_test.txt\" "
+            "stream=\"Zone.Identifier\" win32=50 hint=\""),"MOTW problem text incorrect");
+        const auto writer=CreateFileW((root/L"sub"/L"first.bin").c_str(),GENERIC_WRITE,
+            FILE_SHARE_READ,nullptr,OPEN_EXISTING,0,nullptr);
+        check(writer!=INVALID_HANDLE_VALUE,"refused capture retained other file locks");
+        CloseHandle(writer);
+    }
+    check(DeleteFileW((motw.wstring()+L":Zone.Identifier").c_str())!=FALSE,"MOTW stream removal failed");
+    {
+        artifact::OutputSnapshot snapshot(root.wstring());
+        check(snapshot.capture(1024,2048)==ERROR_SUCCESS,"unblocked file still refused");
+        check(snapshot.files().size()==3 && snapshot.failure().reason==nullptr,"unblocked manifest incorrect");
+    }
+    fs::remove(motw);
+}
+void failure_detail_test(const fs::path& root) {
+    const auto first=root/L"sub"/L"first.bin";
+    {
+        // A writer that denies sharing, like an open ETL trace.
+        const auto busy=CreateFileW(first.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_EXISTING,0,nullptr);
+        check(busy!=INVALID_HANDLE_VALUE,"busy file setup failed");
+        artifact::OutputSnapshot snapshot(root.wstring());
+        const auto error=snapshot.capture(1024,2048);
+        CloseHandle(busy);
+        check(error==ERROR_SHARING_VIOLATION,"busy file accepted");
+        check(std::string(snapshot.failure().reason)=="FILE_IN_USE" &&
+              snapshot.failure().relative_path==L"sub\\first.bin","busy file not named");
+    }
+    {
+        artifact::OutputSnapshot snapshot(root.wstring());
+        check(snapshot.capture(4,2048)==ERROR_FILE_TOO_LARGE,"per-file limit not enforced");
+        check(starts_with(artifact::capture_problem(snapshot.failure()),
+            "OUTPUT_TOO_LARGE: FILE_TOO_LARGE path=\"sub\\first.bin\" "),"per-file limit not named");
+        check(snapshot.capture(1024,7)==ERROR_FILE_TOO_LARGE,"total limit not enforced");
+        check(std::string(snapshot.failure().reason)=="TOTAL_TOO_LARGE" &&
+              snapshot.failure().relative_path==L"sub\\first.bin","total limit not named");
+    }
+    {
+        // Overlong names are clipped without splitting a surrogate pair.
+        artifact::CaptureFailure failure;
+        failure.error=ERROR_NOT_SUPPORTED;failure.reason="STREAMS_NOT_SUPPORTED";
+        for(int i=0;i<2000;++i)failure.relative_path+=L"\U0001F600";
+        failure.stream=std::wstring(500,L's');
+        const auto problem=artifact::capture_problem(failure);
+        check(problem.size()<=900 && problem.find("...")!=std::string::npos,"overlong problem not bounded");
+        check(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,problem.data(),
+            static_cast<int>(problem.size()),nullptr,0)>0,"bounded problem is not valid UTF-8");
+    }
+}
 
 void protocol_test(const fs::path& root) {
     const scrp::SessionContext identity{"SES-OUTPUT-TEST","RT-1",1};
@@ -64,6 +138,17 @@ void protocol_test(const fs::path& root) {
     auto rejected=exchange(too_large);
     check(!rejected.payload["complete"].asBool() && rejected.payload["files"].empty(),
           "failed capture returned partial manifest");
+    check(starts_with(rejected.payload["problem"].asString(),"OUTPUT_TOO_LARGE: FILE_TOO_LARGE path="),
+          "size problem lost its code or path");
+    const auto motw=(root/L"browser.txt").wstring();
+    write_stream(motw,"saved");
+    write_stream(motw+L":Zone.Identifier","[ZoneTransfer]\r\nZoneId=3\r\n");
+    rejected=exchange(request("CAPTURE",scrp::uuid_v4()));
+    check(!rejected.payload["complete"].asBool() && rejected.payload["files"].empty() &&
+          starts_with(rejected.payload["problem"].asString(),
+              "OUTPUT_UNAVAILABLE: STREAMS_NOT_SUPPORTED path=\"browser.txt\" stream=\"Zone.Identifier\""),
+          "MOTW refusal did not name the file and stream");
+    fs::remove(motw);
     fs::remove(root/L"late.txt");
     check(exchange(request("CAPTURE",id)).payload["complete"].asBool(),"capture after release failed");
     session.stop();
@@ -102,11 +187,15 @@ int main(int argc,char** argv) {
             check(snapshot.files().size()==2,"recapture missed added file");
         }
         protocol_test(root);
+        motw_test(root);
+        failure_detail_test(root);
         check(CreateHardLinkW((root/L"alias.bin").c_str(),first.c_str(),nullptr)!=FALSE,"hardlink test setup failed");
         {
             artifact::OutputSnapshot snapshot(root.wstring());
             check(snapshot.capture(1024,2048)!=ERROR_SUCCESS,"hardlink alias accepted");
             check(snapshot.files().empty(),"rejected manifest retained locks/files");
+            check(std::string(snapshot.failure().reason)=="HARDLINK" &&
+                  snapshot.failure().relative_path==L"alias.bin","hardlink refusal not named");
         }
         fs::remove(root/L"alias.bin");fs::remove(first);fs::remove(root/L"new.txt");
         fs::remove(root/L"sub");fs::remove(root);

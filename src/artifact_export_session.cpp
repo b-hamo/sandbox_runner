@@ -235,7 +235,9 @@ void ArtifactExportSession::release_snapshot_locked() {
     auto captured=std::make_unique<artifact::OutputSnapshot>(output_);
     const auto error=captured->capture(request.payload["max_file_bytes"].asUInt64(),
         request.payload["max_total_bytes"].asUInt64());
-    if(error)return snapshot_reply(request,error==ERROR_FILE_TOO_LARGE ? "OUTPUT_TOO_LARGE" : "OUTPUT_UNAVAILABLE");
+    // The capture stays all-or-nothing. The problem only says which entry
+    // refused it and why, so the Agent can fix that file and retry.
+    if(error)return snapshot_reply(request,artifact::capture_problem(captured->failure()).c_str());
     auto reply=snapshot_reply(request);
     for(const auto& file:captured->files()) {
         Json::Value item(Json::objectValue);
