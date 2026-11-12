@@ -25,6 +25,27 @@ The correlated `OUTPUT_SNAPSHOT_RESULT` has status OK, null error, and payload:
 
 Domain failures set `complete=false`, a nonempty `problem`, and an empty `files`
 array. They must never be interpreted as a successfully acquired empty folder.
+
+A refused CAPTURE stays all-or-nothing: one unacceptable entry refuses the whole
+Output. Its `problem` names that entry so the Agent can fix it and retry. The
+message fields are unchanged; only the `problem` string carries more detail. It
+starts with the former code and is at most 900 UTF-8 bytes:
+
+```text
+OUTPUT_UNAVAILABLE: STREAMS_NOT_SUPPORTED path="minobox_export_test.txt" stream="Zone.Identifier" win32=50 hint="remove alternate data streams such as Zone.Identifier (e.g. Unblock-File), then retry"
+```
+
+The first token is `OUTPUT_TOO_LARGE` for size limits and `OUTPUT_UNAVAILABLE`
+otherwise. Reasons: `STREAMS_NOT_SUPPORTED` (named streams such as a browser's
+MOTW), `FILE_IN_USE`, `HARDLINK`, `REPARSE_POINT`, `INVALID_NAME`,
+`NOT_REGULAR_FILE`, `ACCESS_DENIED`, `FILE_CHANGED`, `FILE_REMOVED`,
+`FILE_TOO_LARGE`, `TOTAL_TOO_LARGE`, `TOO_MANY_FILES`, `OUTPUT_CHANGED`,
+`OUTPUT_ROOT_UNAVAILABLE`, `OS_ERROR`. `path` (relative to Output, long names
+clipped in the middle), `stream` and `hint` are present only when known. The
+reason is a re-inspection for diagnosis, not a verdict; the Host must treat the
+whole string as untrusted display text. Named streams are still refused and are
+never uploaded.
+
 Only CAPTURE returns files. VERIFY compares the complete current path list and
 held identities; RELEASE unlocks the matching snapshot. RELEASE also succeeds
 when no snapshot is held, so a lost CAPTURE/RELEASE reply can be reconciled
